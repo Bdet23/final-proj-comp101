@@ -12,12 +12,11 @@
 
 // ---------- Configuration ----------
 const SIZES = {
-  small:  { label: 'Small · 4 districts',  cols: 6,  rows: 6, districts: 4 },
-  medium: { label: 'Medium · 6 districts', cols: 8,  rows: 7, districts: 6 },
-  large:  { label: 'Large · 8 districts',  cols: 10, rows: 8, districts: 8 },
+  small:  { label: 'Small · 4 districts',  cols: 7,  rows: 6, districts: 4, cities: 1 },
+  medium: { label: 'Medium · 6 districts', cols: 9,  rows: 8, districts: 6, cities: 2 },
+  large:  { label: 'Large · 8 districts',  cols: 11, rows: 9, districts: 8, cities: 2 },
 };
 const TOLERANCE = 0.05;          // districts must be within ±5% of ideal population
-const PEOPLE_PER_TILE = 4000;    // average tile population
 const HEX = 34;                  // hex radius in SVG units
 const PAD = 6;
 const SQRT3 = Math.sqrt(3);
@@ -136,9 +135,91 @@ function computeStats(tiles, assign, n, ideal) {
 }
 
 // ---------- Map generation ----------
-// The generator first draws a hidden, valid district plan, then sets
-// populations and vote shares so that this plan wins for the player.
-// That guarantees every map has at least one winning solution.
+// 1. Voter geography is built on its own (cities, suburbs, countryside, a
+//    corridor, scattered pockets). No district plan is involved, so the
+//    map does not give away an answer.
+// 2. Many random legal plans are drawn and scored. A map is kept only when
+//    few of them win, so obvious compact districts tend to lose.
+// 3. A solver (simulated annealing) searches for a winning plan, which proves
+//    the map can be won and is kept as the hidden solution.
+
+const ENSEMBLE_SIZE = 150;          // random legal plans drawn per map
+const MAX_WIN_FRACTION = 0.05;      // at most 5% of random plans may win
+const MAP_ATTEMPTS = 12;            // candidate maps tried per seed
+
+const lerp = (a, b, t) => a + (b - a) * t;
+
+function generateGeography(tiles, cfg, rand) {
+  const maxX = Math.max(...tiles.map((t) => t.x));
+  const maxY = Math.max(...tiles.map((t) => t.y));
+  const step = SQRT3 * HEX; // distance between neighboring tile centers
+  const gauss = (t, c, radius) => Math.exp(-((t.x - c.x) ** 2 + (t.y - c.y) ** 2) / (2 * radius * radius));
+
+  // Cities: dense, and lean toward one party.
+  const cities = range(cfg.cities).map(() => ({
+    x: lerp(0.15, 0.85, rand()) * maxX,
+    y: lerp(0.15, 0.85, rand()) * maxY,
+    size: 0.75 + rand() * 0.5,
+  }));
+  const urban = tiles.map((t) =>
+    Math.min(1, cities.reduce((s, c) => s + c.size * gauss(t, c, step * 1.5 * c.size), 0))
+  );
+
+  for (const t of tiles) {
+    const u = urban[t.id];
+    t.pop = Math.round((1100 + rand() * 1300 + 9000 * u ** 1.4) / 10) * 10;
+  }
+
+  // Base lean: the countryside and the cities favor different parties.
+  const playerIsUrban = rand() < 0.5;
+  const lean = tiles.map((t) => {
+    const ruralLean = 0.6;
+    const urbanLean = 0.27;
+    const opp = lerp(ruralLean, urbanLean, urban[t.id]);
+    return playerIsUrban ? 1 - opp : opp;
+  });
+
+  // Regional variation: a few broad swings in either direction.
+  for (let k = 0; k < 4; k++) {
+    const c = { x: rand() * maxX, y: rand() * maxY };
+    const amp = (rand() - 0.5) * 0.22;
+    const radius = step * (1.5 + rand() * 1.5);
+    for (const t of tiles) lean[t.id] += amp * gauss(t, c, radius);
+  }
+
+  // Corridor (river valley or highway): a thin band that leans one way.
+  const px = lerp(0.3, 0.7, rand()) * maxX;
+  const py = lerp(0.3, 0.7, rand()) * maxY;
+  const angle = rand() * Math.PI;
+  const corridorAmp = (rand() < 0.7 ? 1 : -1) * (0.12 + rand() * 0.08);
+  for (const t of tiles) {
+    const dist = Math.abs((t.x - px) * Math.sin(angle) - (t.y - py) * Math.cos(angle));
+    if (dist < step * 0.6) lean[t.id] += corridorAmp;
+  }
+
+  // Pockets: isolated tiles that go against their surroundings.
+  const pockets = 3 + Math.floor(rand() * 4);
+  for (let k = 0; k < pockets; k++) {
+    const i = Math.floor(rand() * tiles.length);
+    lean[i] += lean[i] > 0.5 ? -0.22 : 0.22;
+  }
+
+  // Local noise.
+  for (const t of tiles) lean[t.id] += (rand() - 0.5) * 0.1;
+
+  // Shift everything so the player trails statewide (42–48%).
+  const targetShare = 0.42 + rand() * 0.06;
+  const clampLean = (x) => Math.min(0.94, Math.max(0.06, x));
+  const totalPop = tiles.reduce((s, t) => s + t.pop, 0);
+  const shareWith = (shift) => tiles.reduce((s, t) => s + t.pop * clampLean(lean[t.id] + shift), 0) / totalPop;
+  let lo = -0.6;
+  let hi = 0.6;
+  for (let k = 0; k < 40; k++) {
+    const mid = (lo + hi) / 2;
+    if (shareWith(mid) < targetShare) lo = mid; else hi = mid;
+  }
+  for (const t of tiles) t.lean = Math.round(clampLean(lean[t.id] + lo) * 100);
+}
 
 function pickSeeds(tiles, n, rand) {
   const seeds = [Math.floor(rand() * tiles.length)];
@@ -159,16 +240,17 @@ function pickSeeds(tiles, n, rand) {
   return seeds;
 }
 
+// Grow districts from random seeds, always extending the least populated one.
 function growPartition(tiles, n, rand) {
   const owner = new Array(tiles.length).fill(-1);
-  const sizes = new Array(n).fill(0);
+  const pops = new Array(n).fill(0);
   pickSeeds(tiles, n, rand).forEach((s, d) => {
     owner[s] = d;
-    sizes[d] = 1;
+    pops[d] = tiles[s].pop;
   });
   let remaining = tiles.length - n;
   while (remaining > 0) {
-    const order = range(n).sort((a, b) => sizes[a] - sizes[b] || rand() - 0.5);
+    const order = range(n).sort((a, b) => pops[a] - pops[b]);
     let grew = false;
     for (const d of order) {
       const frontier = [];
@@ -179,7 +261,7 @@ function growPartition(tiles, n, rand) {
       if (frontier.length) {
         const j = frontier[Math.floor(rand() * frontier.length)];
         owner[j] = d;
-        sizes[d]++;
+        pops[d] += tiles[j].pop;
         remaining--;
         grew = true;
         break;
@@ -187,92 +269,170 @@ function growPartition(tiles, n, rand) {
     }
     if (!grew) return null;
   }
-  const avg = tiles.length / n;
-  if (Math.min(...sizes) < avg * 0.6) return null;
   return owner;
 }
 
-function assignPopulations(tiles, plan, n, rand) {
-  // A few "cities" make nearby tiles more populous.
-  const cityCount = 1 + Math.floor(n / 3);
-  const cities = range(cityCount).map(() => tiles[Math.floor(rand() * tiles.length)]);
-  const spread = 2 * (HEX * 2.5) ** 2;
-  const weight = tiles.map((t) =>
-    1 + rand() * 0.8 + cities.reduce((s, c) => s + 4 * Math.exp(-((t.x - c.x) ** 2 + (t.y - c.y) ** 2) / spread), 0)
-  );
-
-  const ideal = Math.round(((tiles.length / n) * PEOPLE_PER_TILE) / 1000) * 1000;
-  for (let d = 0; d < n; d++) {
-    const ids = tiles.filter((t) => plan[t.id] === d).map((t) => t.id);
-    const total = ids.reduce((s, i) => s + weight[i], 0);
-    let sum = 0;
-    for (const i of ids) {
-      tiles[i].pop = Math.max(200, Math.round((ideal * weight[i]) / total / 10) * 10);
-      sum += tiles[i].pop;
-    }
-    // Put any rounding difference on the largest tile so the hidden plan is exact.
-    const biggest = ids.reduce((a, b) => (tiles[a].pop >= tiles[b].pop ? a : b));
-    tiles[biggest].pop += ideal - sum;
+// Simulated annealing over single-tile moves between neighboring districts.
+// Districts always stay connected; population limits are a penalty, and only
+// fully legal plans are recorded. With seatW = 0 it simply makes a plan legal.
+function anneal(tiles, start, n, ideal, rand, o) {
+  const T = tiles.length;
+  const assign = start.slice();
+  const pop = new Array(n).fill(0);
+  const votes = new Array(n).fill(0);
+  const size = new Array(n).fill(0);
+  for (const t of tiles) {
+    const d = assign[t.id];
+    pop[d] += t.pop;
+    votes[d] += (t.pop * t.lean) / 100;
+    size[d]++;
   }
-  return ideal;
-}
+  const tolAbs = ideal * TOLERANCE;
+  const excess = (p) => Math.max(0, Math.abs(p - ideal) - tolAbs) / ideal;
+  const value = (p, v) => {
+    const s = v / p;
+    return o.seatW * (s > 0.5 ? 1 : 0) + o.marginW * Math.tanh((s - 0.5) * 20) - o.penW * excess(p);
+  };
 
-function assignLeans(tiles, plan, n, target, rand) {
-  const winners = new Set(shuffle(range(n), rand).slice(0, target));
-  const base = range(n).map((d) => (winners.has(d) ? 0.525 + rand() * 0.045 : 0.22 + rand() * 0.16));
+  let bad = 0;
+  for (let d = 0; d < n; d++) if (excess(pop[d]) > 0) bad++;
 
-  let lean = tiles.map((t) => base[plan[t.id]] + (rand() - 0.5) * 0.22);
-  // Blur across tiles so the hidden plan's borders are not obvious.
-  for (let pass = 0; pass < 2; pass++) {
-    lean = tiles.map((t) => {
-      const ns = t.nbrs.filter((j) => j >= 0);
-      const avg = ns.reduce((s, j) => s + lean[j], 0) / ns.length;
-      return 0.55 * lean[t.id] + 0.45 * avg;
-    });
-  }
-  // Re-center every hidden district on its intended vote share.
-  for (let it = 0; it < 6; it++) {
+  let best = null;
+  let bestSeats = -1;
+  let bestScore = -Infinity;
+  const record = () => {
+    let seats = 0;
+    let score = 0;
     for (let d = 0; d < n; d++) {
-      let pop = 0;
-      let votes = 0;
-      for (const t of tiles) {
-        if (plan[t.id] === d) {
-          pop += t.pop;
-          votes += t.pop * lean[t.id];
+      const s = votes[d] / pop[d];
+      if (s > 0.5) seats++;
+      score += Math.tanh((s - 0.5) * 20);
+    }
+    if (seats > bestSeats || (seats === bestSeats && score > bestScore)) {
+      bestSeats = seats;
+      bestScore = score;
+      best = assign.slice();
+    }
+  };
+
+  if (bad === 0) {
+    record();
+    if (o.stopWhenValid) return { plan: best, seats: bestSeats };
+  }
+
+  const mark = new Int32Array(T);
+  const stack = new Int32Array(T);
+  let stamp = 0;
+  for (let it = 0; it < o.iters; it++) {
+    const temp = o.t0 * Math.pow(o.t1 / o.t0, it / o.iters);
+    const i = Math.floor(rand() * T);
+    const j = tiles[i].nbrs[Math.floor(rand() * 6)];
+    if (j < 0) continue;
+    const a = assign[i];
+    const b = assign[j];
+    if (a === b || size[a] === 1) continue;
+
+    const p = tiles[i].pop;
+    const v = (p * tiles[i].lean) / 100;
+    const delta =
+      value(pop[a] - p, votes[a] - v) + value(pop[b] + p, votes[b] + v) -
+      value(pop[a], votes[a]) - value(pop[b], votes[b]);
+    if (delta < 0 && rand() >= Math.exp(delta / temp)) continue;
+
+    // District a must stay connected without tile i.
+    stamp++;
+    let first = -1;
+    for (const k of tiles[i].nbrs) if (k >= 0 && assign[k] === a) { first = k; break; }
+    if (first < 0) continue;
+    mark[i] = stamp;
+    mark[first] = stamp;
+    let sp = 0;
+    let count = 1;
+    stack[sp++] = first;
+    while (sp) {
+      const x = stack[--sp];
+      for (const y of tiles[x].nbrs) {
+        if (y >= 0 && assign[y] === a && mark[y] !== stamp) {
+          mark[y] = stamp;
+          stack[sp++] = y;
+          count++;
         }
       }
-      const shift = base[d] - votes / pop;
-      for (const t of tiles) {
-        if (plan[t.id] === d) lean[t.id] = Math.min(0.95, Math.max(0.05, lean[t.id] + shift));
-      }
+    }
+    if (count !== size[a] - 1) continue;
+
+    const wasBad = (excess(pop[a]) > 0 ? 1 : 0) + (excess(pop[b]) > 0 ? 1 : 0);
+    assign[i] = b;
+    pop[a] -= p; votes[a] -= v; size[a]--;
+    pop[b] += p; votes[b] += v; size[b]++;
+    bad += (excess(pop[a]) > 0 ? 1 : 0) + (excess(pop[b]) > 0 ? 1 : 0) - wasBad;
+
+    if (bad === 0) {
+      record();
+      if (o.stopWhenValid) break;
     }
   }
-  for (const t of tiles) t.lean = Math.round(lean[t.id] * 100);
+  return best ? { plan: best, seats: bestSeats } : null;
+}
+
+function sampleLegalPlans(tiles, n, ideal, rand) {
+  const samples = [];
+  for (let k = 0; k < ENSEMBLE_SIZE * 2 && samples.length < ENSEMBLE_SIZE; k++) {
+    const start = growPartition(tiles, n, rand);
+    if (!start) continue;
+    const r = anneal(tiles, start, n, ideal, rand, {
+      seatW: 0, marginW: 0, penW: 30, t0: 0.05, t1: 0.002, iters: 4000, stopWhenValid: true,
+    });
+    if (r) samples.push(r);
+  }
+  return samples;
+}
+
+function findBestPlan(tiles, n, ideal, samples, rand) {
+  const starts = samples.slice().sort((a, b) => b.seats - a.seats).slice(0, 4);
+  let best = null;
+  for (const s of starts) {
+    const r = anneal(tiles, s.plan, n, ideal, rand, {
+      seatW: 1, marginW: 0.25, penW: 25, t0: 0.6, t1: 0.02, iters: 25000, stopWhenValid: false,
+    });
+    if (r && (!best || r.seats > best.seats)) best = r;
+  }
+  return best;
 }
 
 function generateMap(sizeKey, seed) {
   const cfg = SIZES[sizeKey];
   const n = cfg.districts;
   const target = Math.floor(n / 2) + 1;
-  for (let attempt = 0; attempt < 50; attempt++) {
+  let fallback = null;
+
+  for (let attempt = 0; attempt < MAP_ATTEMPTS; attempt++) {
     const rand = mulberry32(seed * 7919 + attempt);
     const tiles = buildGrid(cfg.cols, cfg.rows);
-    let plan = null;
-    for (let k = 0; k < 100 && !plan; k++) plan = growPartition(tiles, n, rand);
-    if (!plan) continue;
-    const ideal = assignPopulations(tiles, plan, n, rand);
-    assignLeans(tiles, plan, n, target, rand);
+    generateGeography(tiles, cfg, rand);
 
-    const stats = computeStats(tiles, plan, n, ideal);
-    const seats = stats.filter((s) => s.wins).length;
-    const valid = stats.every((s) => s.popOk && s.connected);
-    const totalVotes = stats.reduce((s, d) => s + d.votes, 0);
-    const totalPop = stats.reduce((s, d) => s + d.pop, 0);
-    // Keep only maps that are solvable and where the player trails statewide.
-    if (valid && seats >= target && totalVotes / totalPop < 0.5) {
-      return { sizeKey, cfg, seed, tiles, ideal, target, solution: plan, totalPop, statewideShare: totalVotes / totalPop };
-    }
+    const totalPop = tiles.reduce((s, t) => s + t.pop, 0);
+    const ideal = totalPop / n;
+    const statewideShare = tiles.reduce((s, t) => s + (t.pop * t.lean) / 100, 0) / totalPop;
+    if (statewideShare >= 0.5) continue;
+
+    const samples = sampleLegalPlans(tiles, n, ideal, rand);
+    if (samples.length < ENSEMBLE_SIZE / 2) continue;
+    const winFraction = samples.filter((s) => s.seats >= target).length / samples.length;
+    if (winFraction > 0.25) continue; // far too easy, don't bother solving
+
+    const best = findBestPlan(tiles, n, ideal, samples, rand);
+    if (!best || best.seats < target) continue;
+
+    const map = {
+      sizeKey, cfg, seed, tiles, ideal, target, totalPop, statewideShare,
+      solution: best.plan, maxSeats: best.seats, winFraction, sampleCount: samples.length,
+    };
+    if (winFraction <= MAX_WIN_FRACTION) return map;
+    if (!fallback || winFraction < fallback.winFraction) fallback = map;
   }
+  if (fallback) return fallback;
+  if (seed < 1e9) return generateMap(sizeKey, seed + 1000003);
   throw new Error('Could not generate a map for seed ' + seed);
 }
 
@@ -314,14 +474,28 @@ function randomSeed() {
 }
 
 function startGame(sizeKey, seed) {
-  game = generateMap(sizeKey, seed);
+  // Generation can take up to a second, so show a message and let the page paint first.
+  els.loading.hidden = false;
+  els.board.classList.add('busy');
+  setTimeout(() => {
+    try {
+      loadMap(generateMap(sizeKey, seed));
+    } finally {
+      els.loading.hidden = true;
+      els.board.classList.remove('busy');
+    }
+  }, 30);
+}
+
+function loadMap(map) {
+  game = map;
   ui.assign = new Array(game.tiles.length).fill(-1);
   ui.tool = 0;
   ui.revealed = false;
   try {
     const url = new URL(window.location.href);
-    url.searchParams.set('size', sizeKey);
-    url.searchParams.set('seed', String(seed));
+    url.searchParams.set('size', game.sizeKey);
+    url.searchParams.set('seed', String(game.seed));
     window.history.replaceState(null, '', url);
   } catch (e) { /* URL updates are optional */ }
   buildBoard();
@@ -429,7 +603,14 @@ function renderGoal() {
     <p>Draw <strong>${game.cfg.districts}</strong> districts and win at least <strong>${game.target}</strong> of them.</p>
     <p>Every district must be connected with <strong>${fmtInt(lo)}–${fmtInt(hi)}</strong> people
        (ideal ${fmtInt(game.ideal)}, ±${TOLERANCE * 100}%).</p>
+    <p class="muted">Difficulty: ${difficultyText()}</p>
     <p class="muted">Map #${game.seed}</p>`;
+}
+
+function difficultyText() {
+  const pct = Math.round(game.winFraction * 100);
+  const share = pct === 0 ? `none of ${game.sampleCount}` : `only ${pct}%`;
+  return `${share} of randomly drawn legal maps win ${game.target}+ seats.`;
 }
 
 function buildDistrictList() {
@@ -504,6 +685,7 @@ function renderSummary(stats) {
 }
 
 function render() {
+  if (!game) return;
   const stats = computeStats(game.tiles, ui.assign, game.cfg.districts, game.ideal);
   renderTiles();
   renderBorders();
@@ -583,7 +765,7 @@ function bindEvents() {
   els.submit.addEventListener('click', holdElection);
 
   document.addEventListener('keydown', (e) => {
-    if (els.dialog.open || e.target.closest('input, select, textarea')) return;
+    if (!game || els.dialog.open || e.target.closest('input, select, textarea')) return;
     if (e.metaKey || e.ctrlKey || e.altKey) return;
     const num = Number(e.key);
     if (Number.isInteger(num) && num >= 1 && num <= game.cfg.districts) setTool(num - 1);
@@ -629,6 +811,7 @@ function openDialog(bodyHtml, actions) {
 }
 
 function holdElection() {
+  if (!game) return;
   const stats = computeStats(game.tiles, ui.assign, game.cfg.districts, game.ideal);
   const problems = validatePlan(stats);
   if (problems.length) {
@@ -696,6 +879,7 @@ function init() {
   els.dialog = $('#result-dialog');
   els.dialogBody = $('#result-body');
   els.dialogActions = $('#result-actions');
+  els.loading = $('#loading');
 
   for (const [key, cfg] of Object.entries(SIZES)) {
     const opt = document.createElement('option');

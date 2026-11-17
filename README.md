@@ -12,7 +12,11 @@ A browser game about gerrymandering. Group hex tiles into districts so your cand
 
 Controls: choose a district, then click or drag across tiles to paint them. Clicking a tile that is already in the chosen district removes it. Keyboard: `1`–`8` choose a district, `E` selects the eraser, `V` switches between the voter view and the district view.
 
-Every generated map has at least one winning plan. If you lose, you can reveal one.
+## How maps are made
+
+1. **Voter geography first.** Dense cities, suburbs, countryside, a corridor (river or highway) and scattered pockets set each tile's population and vote share. No district plan is involved, so the map does not reveal an answer.
+2. **Difficulty check.** About 150 random legal plans are drawn. A map is kept only if at most 5% of them reach the target, so the obvious compact districts usually lose.
+3. **Solver.** Simulated annealing searches for a winning plan, which proves the map can be won. If you lose, you can reveal that plan.
 A map can be shared with its URL (`?size=medium&seed=42`).
 
 ## Running

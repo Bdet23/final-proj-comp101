@@ -127,6 +127,22 @@ kbd {
   min-width: 0;
 }
 
+.board-wrap { position: relative; }
+.loading {
+  position: absolute;
+  top: 1rem;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0.35rem 0.9rem;
+  font-size: 0.9rem;
+  box-shadow: var(--shadow);
+}
+.loading[hidden] { display: none; }
+#board.busy { opacity: 0.4; pointer-events: none; }
+
 #board {
   display: block;
   width: 100%;
