@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Gerrymander</title>
+  <meta name="description" content="Draw district lines on a hex map so your candidate wins the most seats.">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <h1>Gerrymander</h1>
+      <span class="subtitle">Draw the lines. Win the seats.</span>
+    </div>
+    <div class="controls">
+      <label class="size-label">Map
+        <select id="size-select"></select>
+      </label>
+      <button id="new-map" type="button">New map</button>
+      <button id="reset" type="button">Clear districts</button>
+      <button id="toggle-view" type="button">Show districts</button>
+      <button id="submit" type="button" class="primary">Hold election</button>
+    </div>
+  </header>
+
+  <main class="layout">
+    <section class="board-wrap">
+      <svg id="board" role="img" aria-label="Hex map of the state"></svg>
+      <div class="legend" id="legend">
+        <span>Opponent</span>
+        <span class="legend-bar" aria-hidden="true"></span>
+        <span>Your candidate</span>
+      </div>
+      <p id="tile-info" class="tile-info">Hover over a tile to see its details.</p>
+    </section>
+
+    <aside class="sidebar">
+      <div class="card goal" id="goal"></div>
+
+      <div class="card">
+        <h2>Districts</h2>
+        <p class="hint">Pick a district, then click or drag across tiles to paint them. Click a painted tile again to remove it.</p>
+        <div id="district-list" class="district-list"></div>
+        <button id="eraser-btn" type="button" class="tool-btn">Eraser <kbd>E</kbd></button>
+      </div>
+
+      <div class="card" id="summary"></div>
+
+      <details class="card how">
+        <summary>How to play</summary>
+        <ul>
+          <li>Each hex is a neighborhood. The big number is its population; the percentage is the share of voters expected to vote for <strong>your candidate</strong>.</li>
+          <li>Split the whole map into the required number of districts. Every tile must belong to a district.</li>
+          <li>Each district must be one connected piece and its population must be within ±5% of the ideal size.</li>
+          <li>Your candidate wins a district when more than 50% of its voters support them.</li>
+          <li>Win at least the target number of districts, even though your candidate has fewer votes statewide.</li>
+          <li>Shortcuts: <kbd>1</kbd>–<kbd>8</kbd> pick a district, <kbd>E</kbd> eraser, <kbd>V</kbd> switch view.</li>
+        </ul>
+      </details>
+    </aside>
+  </main>
+
+  <dialog id="result-dialog">
+    <div id="result-body"></div>
+    <div class="dialog-actions" id="result-actions"></div>
+  </dialog>
+
+  <script src="game.js"></script>
+</body>
+</html>
