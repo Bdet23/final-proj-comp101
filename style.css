@@ -308,3 +308,48 @@ dialog ul { padding-left: 1.1rem; }
 .results-table th, .results-table td { padding: 0.35rem 0.4rem; border-bottom: 1px solid var(--border); text-align: left; }
 .results-table td.num, .results-table th.num { text-align: right; }
 .results-table .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 0.4rem; vertical-align: middle; }
+
+/* ---------- Tutorial ---------- */
+.lesson {
+  border: 1px solid var(--accent);
+  border-radius: 10px;
+  padding: 0.75rem 0.9rem;
+  margin-bottom: 0.75rem;
+  background: color-mix(in srgb, var(--accent) 7%, var(--surface));
+}
+.lesson[hidden] { display: none; }
+.lesson-head { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; margin-bottom: 0.4rem; }
+.lesson-label { font-size: 0.75rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--accent); }
+.lesson-steps { display: flex; gap: 0.3rem; }
+.lesson .step {
+  width: 1.8rem;
+  height: 1.8rem;
+  padding: 0;
+  border-radius: 50%;
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+.lesson .step.done { border-color: var(--good); color: var(--good); }
+.lesson .step.current { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+.lesson .step:disabled { opacity: 0.4; cursor: not-allowed; }
+.link-btn {
+  margin-left: auto;
+  border: none;
+  background: none;
+  padding: 0.2rem 0;
+  color: var(--muted);
+  text-decoration: underline;
+  font-size: 0.85rem;
+}
+.lesson h2 { font-size: 1.05rem; margin-bottom: 0.3rem; }
+.lesson p { margin: 0.3rem 0; font-size: 0.92rem; }
+.lesson-tip { color: var(--muted); }
+.legend-chip { width: 14px; height: 14px; border-radius: 3px; display: inline-block; }
+.tile .pop.mark { font-size: 22px; }
+.debrief {
+  margin-top: 0.9rem;
+  padding: 0.6rem 0.75rem;
+  border-left: 3px solid var(--good);
+  background: color-mix(in srgb, var(--good) 8%, var(--surface));
+  border-radius: 4px;
+}

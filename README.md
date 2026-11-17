@@ -12,6 +12,16 @@ A browser game about gerrymandering. Group hex tiles into districts so your cand
 
 Controls: choose a district, then click or drag across tiles to paint them. Clicking a tile that is already in the chosen district removes it. Keyboard: `1`–`8` choose a district, `E` selects the eraser, `V` switches between the voter view and the district view.
 
+## Tutorial
+
+New players start with three short lessons (the **Tutorial** button reopens them, and **Skip tutorial** goes straight to the game):
+
+1. **Every voter counts.** Each tile is one voter who votes yes or no. Districts must have exactly 5 voters. This lesson teaches cracking and packing.
+2. **People, not land.** Votes are still yes or no, but tiles hold different numbers of people, and districts must be within ±10% of the ideal population.
+3. **Shades of support.** The full model: each tile has a population and a percentage of people who vote for your candidate, with a ±5% limit.
+
+Lesson maps are hand-picked (found with an offline search that uses the game's solver). Progress is saved in the browser, and a lesson can be linked directly with `?tutorial=1`, `2` or `3`.
+
 ## How maps are made
 
 1. **Voter geography first.** Dense cities, suburbs, countryside, a corridor (river or highway) and scattered pockets set each tile's population and vote share. No district plan is involved, so the map does not reveal an answer.

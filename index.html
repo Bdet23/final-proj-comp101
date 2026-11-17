@@ -17,6 +17,7 @@
       <label class="size-label">Map
         <select id="size-select"></select>
       </label>
+      <button id="tutorial-btn" type="button">Tutorial</button>
       <button id="new-map" type="button">New map</button>
       <button id="reset" type="button">Clear districts</button>
       <button id="toggle-view" type="button">Show districts</button>
@@ -26,13 +27,19 @@
 
   <main class="layout">
     <section class="board-wrap">
+      <div id="lesson" class="lesson" hidden>
+        <div class="lesson-head">
+          <span class="lesson-label">Tutorial</span>
+          <span id="lesson-steps" class="lesson-steps"></span>
+          <button id="skip-tutorial" type="button" class="link-btn">Skip tutorial</button>
+        </div>
+        <h2 id="lesson-title"></h2>
+        <p id="lesson-intro"></p>
+        <p id="lesson-tip" class="lesson-tip"></p>
+      </div>
       <svg id="board" role="img" aria-label="Hex map of the state"></svg>
       <div id="loading" class="loading" hidden>Generating map…</div>
-      <div class="legend" id="legend">
-        <span>Opponent</span>
-        <span class="legend-bar" aria-hidden="true"></span>
-        <span>Your candidate</span>
-      </div>
+      <div class="legend" id="legend"></div>
       <p id="tile-info" class="tile-info">Hover over a tile to see its details.</p>
     </section>
 
