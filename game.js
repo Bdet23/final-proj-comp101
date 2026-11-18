@@ -544,7 +544,7 @@ const ui = {
   assign: [],
   tool: 0,            // district index, or 'erase'
   view: 'votes',      // tile colour: 'votes' or 'districts'
-  label: 'lean',      // tile number on full maps: 'lean' (vote %) or 'pop'
+  label: 'lean',      // tile numbers on full maps: 'lean' (vote %), 'pop' or 'both'
   painting: null,
   lastPainted: null,
   revealed: false,
@@ -779,6 +779,7 @@ function buildBoard() {
 function tileText(t) {
   if (game.mode === 'voters') return [supports(t) ? '✓' : '✗', ''];
   if (game.mode === 'binary') return [fmtInt(t.pop), supports(t) ? '✓' : '✗'];
+  if (ui.label === 'both') return [fmtK(t.pop), t.lean + '%'];
   return ui.label === 'pop' ? [fmtK(t.pop), ''] : [t.lean + '%', ''];
 }
 
@@ -1135,7 +1136,10 @@ function bindEvents() {
     if (Number.isInteger(num) && num >= 1 && num <= game.cfg.districts) setTool(num - 1);
     else if (e.key === 'e' || e.key === 'E') setTool('erase');
     else if (e.key === 'v' || e.key === 'V') setView(ui.view === 'votes' ? 'districts' : 'votes');
-    else if ((e.key === 'l' || e.key === 'L') && game.mode === 'percent') setLabel(ui.label === 'lean' ? 'pop' : 'lean');
+    else if ((e.key === 'l' || e.key === 'L') && game.mode === 'percent') {
+      const order = ['lean', 'pop', 'both'];
+      setLabel(order[(order.indexOf(ui.label) + 1) % order.length]);
+    }
   });
 }
 
@@ -1284,7 +1288,7 @@ function init() {
     opt.textContent = cfg.label;
     els.size.append(opt);
   }
-  if (storageGet(LABEL_KEY) === 'pop') ui.label = 'pop';
+  if (['pop', 'both'].includes(storageGet(LABEL_KEY))) ui.label = storageGet(LABEL_KEY);
 
   const params = new URLSearchParams(window.location.search);
   const sizeKey = SIZES[params.get('size')] ? params.get('size') : 'medium';
