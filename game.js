@@ -16,6 +16,10 @@ const SIZES = {
   medium: { label: 'Medium · 6 districts', cols: 9,  rows: 8, districts: 6, cities: 2 },
   large:  { label: 'Large · 8 districts',  cols: 11, rows: 9, districts: 8, cities: 2 },
 };
+// Draw a smaller inner hex whose area shows each tile's population.
+// Set to false to go back to plain tiles (colour only).
+const SIZE_TILES_BY_POPULATION = true;
+const MIN_TILE_SCALE = 0.3;      // smallest inner hex, as a fraction of the tile
 const TOLERANCE = 0.05;          // districts must be within ±5% of ideal population
 const HEX = 34;                  // hex radius in SVG units
 const PAD = 6;
@@ -544,7 +548,7 @@ const ui = {
   assign: [],
   tool: 0,            // district index, or 'erase'
   view: 'votes',      // tile colour: 'votes', 'districts' or 'results'
-  label: 'lean',      // tile numbers on full maps: 'lean' (vote %), 'pop' or 'both'
+  label: 'lean',      // tile numbers on full maps: 'lean' (vote %), 'pop', 'both' or 'none'
   painting: null,
   lastPainted: null,
   revealed: false,
@@ -720,6 +724,7 @@ function startGame(sizeKey, seed) {
 
 function loadMap(map) {
   game = map;
+  game.maxPop = Math.max(...game.tiles.map((t) => t.pop));
   ui.assign = new Array(game.tiles.length).fill(-1);
   ui.tool = 0;
   ui.revealed = false;
@@ -742,6 +747,13 @@ function loadMap(map) {
 
 const RESULT_SPAN = 20; // district results reach full colour at a 20-point lead
 
+function sizeLegend() {
+  if (!sizedTiles()) return '';
+  const hex = (r) => `<svg viewBox="-12 -12 24 24" width="18" height="18" aria-hidden="true">
+      <polygon points="${hexPoints(0, 0, 11)}" class="lg-rim"/><polygon points="${hexPoints(0, 0, 11 * r)}" class="lg-core"/></svg>`;
+  return `<span class="legend-size">${hex(0.4)}${hex(0.94)}<span>Inner hex size = population</span></span>`;
+}
+
 function renderLegend() {
   const opp = `rgb(${OPPONENT_RGB.join(',')})`;
   const you = `rgb(${PLAYER_RGB.join(',')})`;
@@ -757,6 +769,7 @@ function renderLegend() {
       <span class="legend-chip" style="background:${opp}" aria-hidden="true"></span><span>✗ Votes for opponent</span>
       <span class="legend-chip" style="background:${you}" aria-hidden="true"></span><span>✓ Votes for you</span>`;
   }
+  els.legend.insertAdjacentHTML('beforeend', sizeLegend());
 }
 
 // ---------- Board rendering ----------
@@ -771,11 +784,12 @@ function buildBoard() {
   tileEls = game.tiles.map((t) => {
     const g = svgEl('g', { class: 'tile', 'data-id': t.id });
     const poly = svgEl('polygon', { class: 'hex', points: hexPoints(t.x, t.y, HEX) });
+    const inner = svgEl('polygon', { class: 'inner', points: hexPoints(t.x, t.y, HEX * popScale(t)) });
     const main = svgEl('text', { class: 'num', x: t.x, y: t.y + 7 });
     const sub = svgEl('text', { class: 'sub', x: t.x, y: t.y + 21 });
-    g.append(poly, main, sub);
+    g.append(poly, inner, main, sub);
     gTiles.append(g);
-    return { g, poly, main, sub };
+    return { g, poly, inner, main, sub };
   });
   els.defs = svgEl('defs');
   els.borderGroup = svgEl('g', { class: 'district-borders' });
@@ -783,7 +797,17 @@ function buildBoard() {
   els.board.append(els.defs, gTiles, els.borderGroup, els.badges);
 }
 
+// Inner hex size: area is proportional to population (largest tile = full size).
+function popScale(t) {
+  return Math.max(MIN_TILE_SCALE, Math.sqrt(t.pop / game.maxPop)) * 0.94;
+}
+
+// Population sizing applies wherever tiles have different populations,
+// except in the Districts view, which is about district shapes.
+const sizedTiles = () => SIZE_TILES_BY_POPULATION && game.mode !== 'voters' && ui.view !== 'districts';
+
 function tileText(t) {
+  if (ui.label === 'none' && game.mode === 'percent') return ['', ''];
   if (game.mode === 'voters') return [supports(t) ? '✓' : '✗', ''];
   if (game.mode === 'binary') return [fmtInt(t.pop), supports(t) ? '✓' : '✗'];
   if (ui.label === 'both') return [fmtK(t.pop), t.lean + '%'];
@@ -799,10 +823,15 @@ function renderTiles(stats) {
     if (ui.view === 'votes') fill = leanColor(t.lean);
     else if (d >= 0 && ui.view === 'districts') fill = DISTRICT_COLORS[d];
     else if (d >= 0) fill = leanColor(stats[d].share * 100, RESULT_SPAN);
+    const sized = sizedTiles() && fill;
     el.poly.style.fill = fill || 'var(--unassigned)';
+    el.poly.style.fillOpacity = sized ? '0.25' : '';
+    el.inner.style.display = sized ? '' : 'none';
+    if (sized) el.inner.style.fill = fill;
 
     const [main, sub] = tileText(t);
-    const tone = fill ? (isDark(fill) ? ' on-dark' : ' on-light') : '';
+    // On sized tiles text can sit over both the inner hex and the pale rim, so it gets a halo.
+    const tone = sized ? ' halo' : fill ? (isDark(fill) ? ' on-dark' : ' on-light') : '';
     el.main.textContent = main;
     el.sub.textContent = sub;
     el.main.setAttribute('class', 'num' + (game.mode === 'voters' ? ' mark' : '') + tone);
@@ -1158,7 +1187,7 @@ function bindEvents() {
       setView(order[(order.indexOf(ui.view) + 1) % order.length]);
     }
     else if ((e.key === 'l' || e.key === 'L') && game.mode === 'percent') {
-      const order = ['lean', 'pop', 'both'];
+      const order = ['lean', 'pop', 'both', 'none'];
       setLabel(order[(order.indexOf(ui.label) + 1) % order.length]);
     }
   });
@@ -1309,7 +1338,7 @@ function init() {
     opt.textContent = cfg.label;
     els.size.append(opt);
   }
-  if (['pop', 'both'].includes(storageGet(LABEL_KEY))) ui.label = storageGet(LABEL_KEY);
+  if (['pop', 'both', 'none'].includes(storageGet(LABEL_KEY))) ui.label = storageGet(LABEL_KEY);
 
   const params = new URLSearchParams(window.location.search);
   const sizeKey = SIZES[params.get('size')] ? params.get('size') : 'medium';

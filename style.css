@@ -495,3 +495,17 @@ dialog li { margin-bottom: 0.3rem; }
 }
 .legend-mid { font-size: 0.75rem; line-height: 1.2; margin-top: 2px; }
 .tt-result { opacity: 0.85; }
+
+/* Population-sized inner hexes (SIZE_TILES_BY_POPULATION in game.js) */
+.tile .inner { pointer-events: none; transition: fill 0.12s, opacity 0.12s; stroke: var(--text); stroke-opacity: 0.18; stroke-width: 1; }
+.tile.faded .inner { opacity: 0.55; }
+.tile text.halo {
+  fill: var(--text);
+  stroke: var(--surface);
+  stroke-width: 3.5px;
+  stroke-linejoin: round;
+  paint-order: stroke;
+}
+.legend-size { display: inline-flex; align-items: center; gap: 0.25rem; margin-left: 0.75rem; }
+.legend-size .lg-rim { fill: var(--muted); opacity: 0.25; }
+.legend-size .lg-core { fill: var(--muted); }
