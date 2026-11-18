@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Gerrymander</title>
   <meta name="description" content="Draw district lines on a hex map so your candidate wins the most seats.">
-  <link rel="stylesheet" href="style.css?v=9">
+  <link rel="stylesheet" href="style.css?v=10">
 </head>
 <body>
   <header class="topbar">
@@ -51,6 +51,7 @@
           <button type="button" data-view="votes">Voters</button>
           <button type="button" data-view="districts">Districts</button>
           <button type="button" data-view="results">Results</button>
+          <button type="button" data-view="regions" hidden>Regions</button>
         </div>
         <div class="segmented" id="label-toggle" role="group" aria-label="Number shown on tiles">
           <span class="seg-label">Show</span>
@@ -60,6 +61,17 @@
           <button type="button" data-label="none">None</button>
         </div>
         <button id="reset" type="button" class="ghost">Clear districts</button>
+      </div>
+
+      <div class="uncertainty-bar" id="uncertainty-bar" hidden>
+        <label class="swing-label" for="swing-slider">Stress test: statewide swing</label>
+        <span class="swing-end">toward opponent</span>
+        <input type="range" id="swing-slider" min="-6" max="6" step="0.5" value="0"
+               aria-describedby="swing-value">
+        <span class="swing-end">toward you</span>
+        <span id="swing-value" class="swing-value">none</span>
+        <button id="swing-reset" type="button" class="ghost">Reset</button>
+        <button id="uncertainty-info" type="button" class="link-btn">How uncertain?</button>
       </div>
 
       <div class="board-area" id="board-area">
@@ -92,7 +104,7 @@
           <li>Your candidate wins a district when more than 50% of its voters support them. The badge on each district shows its result: green means you lead.</li>
           <li>Win at least the target number of districts, even though your candidate has fewer votes statewide.</li>
           <li><strong>Realistic mode:</strong> each election the state, its regions and each tile can swing a few points. Badges show each district's chance to win, and you need a 70% chance of winning the target number of seats.</li>
-          <li>Shortcuts: <kbd>1</kbd>–<kbd>8</kbd> pick a district, <kbd>E</kbd> eraser, <kbd>V</kbd> cycle colours (voters, districts, results), <kbd>L</kbd> cycle tile numbers.</li>
+          <li>Shortcuts: <kbd>1</kbd>–<kbd>8</kbd> pick a district, <kbd>E</kbd> eraser, <kbd>V</kbd> cycle colours, <kbd>L</kbd> cycle tile numbers.</li>
         </ul>
       </details>
     </aside>
@@ -103,6 +115,6 @@
     <div class="dialog-actions" id="result-actions"></div>
   </dialog>
 
-  <script src="game.js?v=9"></script>
+  <script src="game.js?v=10"></script>
 </body>
 </html>
