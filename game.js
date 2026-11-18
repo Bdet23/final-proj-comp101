@@ -24,9 +24,11 @@ const SQRT3 = Math.sqrt(3);
 const PLAYER_RGB = [43, 95, 180];     // your candidate (blue)
 const OPPONENT_RGB = [192, 57, 43];   // opponent (red)
 const NEUTRAL_RGB = [243, 241, 234];
+// District colours avoid the red/blue vote scale; numbers on the badges keep
+// districts distinguishable for colour-blind players.
 const DISTRICT_COLORS = [
-  '#0f8f7e', '#d98e04', '#8e44ad', '#4f8f2a',
-  '#c2457f', '#8d6e4c', '#1e9cc4', '#6b7280',
+  '#0e9384', '#d4a106', '#3f8f3a', '#8b5e3c',
+  '#5b6878', '#8a9a1c', '#5fbf9f', '#b08d57',
 ];
 
 // Neighbor offsets for an "odd-r" pointy-top hex grid, ordered to match the
@@ -538,9 +540,20 @@ const TUTORIAL = [
 
 // ---------- Game state ----------
 let game = null;
-const ui = { assign: [], tool: 0, view: 'votes', painting: null, lastPainted: null, revealed: false };
+const ui = {
+  assign: [],
+  tool: 0,            // district index, or 'erase'
+  view: 'votes',      // tile colour: 'votes' or 'districts'
+  label: 'lean',      // tile number on full maps: 'lean' (vote %) or 'pop'
+  painting: null,
+  lastPainted: null,
+  revealed: false,
+};
 const els = {};
 let tileEls = [];
+
+const WIN_COLOR = '#1f7a46';
+const LOSE_COLOR = '#b3261e';
 
 const $ = (sel) => document.querySelector(sel);
 const SVG_NS = 'http://www.w3.org/2000/svg';
@@ -572,6 +585,7 @@ function isDark(color) {
 // ---------- Tutorial ----------
 const PROGRESS_KEY = 'gerrymander.tutorialProgress'; // number of lessons completed
 const SKIPPED_KEY = 'gerrymander.tutorialSkipped';
+const LABEL_KEY = 'gerrymander.tileLabel';
 
 function storageGet(key) {
   try { return window.localStorage.getItem(key); } catch (e) { return null; }
@@ -632,8 +646,9 @@ function renderLesson() {
     btn.type = 'button';
     btn.className = 'step' + (i === game.lesson ? ' current' : '') + (i < done ? ' done' : '');
     btn.textContent = i < done && i !== game.lesson ? '✓' : String(i + 1);
-    btn.disabled = i > done;
-    btn.title = i > done ? 'Finish the earlier lessons first' : TUTORIAL[i].title;
+    const locked = i > done && i !== game.lesson;
+    btn.disabled = locked;
+    btn.title = locked ? 'Finish the earlier lessons first' : TUTORIAL[i].title;
     btn.setAttribute('aria-label', `Lesson ${i + 1}: ${TUTORIAL[i].title}`);
     btn.addEventListener('click', () => startLesson(i));
     els.lessonSteps.append(btn);
@@ -643,14 +658,47 @@ function renderLesson() {
   els.lessonTip.textContent = L.tip;
 }
 
-// Text helpers that depend on the current map's mode.
+// ---------- Text helpers that depend on the map's mode ----------
 const unitWord = () => (game.mode === 'voters' ? 'voters' : 'people');
 const supports = (t) => t.lean > 50;
+const votesFor = (s) => Math.round(s.votes);
+const votesAgainst = (s) => Math.round(s.pop - s.votes);
+
 function shareText(s) {
   if (game.mode === 'percent') return fmtPct(s.share);
-  return `${Math.round(s.votes)}–${Math.round(s.pop - s.votes)}`;
+  return `${votesFor(s)} for / ${votesAgainst(s)} against`;
 }
 
+function shareShort(s) {
+  if (game.mode === 'percent') return Math.round(s.share * 100) + '%';
+  return `${votesFor(s)}–${votesAgainst(s)}`;
+}
+
+function popBounds() {
+  return { lo: game.ideal * (1 - game.tolerance), hi: game.ideal * (1 + game.tolerance) };
+}
+
+function popRangeText() {
+  const { lo, hi } = popBounds();
+  if (game.tolerance === 0) return `exactly ${fmtInt(game.ideal)} ${unitWord()}`;
+  return `${fmtInt(Math.ceil(lo - 1e-9))}–${fmtInt(Math.floor(hi + 1e-9))} people`;
+}
+
+// Short description of what's wrong with a district, or null if it is legal.
+function districtIssue(s) {
+  if (!s.tiles.length) return 'Empty';
+  if (!s.connected) return 'Split into separate pieces';
+  if (!s.popOk) {
+    const { lo, hi } = popBounds();
+    if (s.pop > hi) return `${fmtInt(Math.ceil(s.pop - hi - 1e-9))} too many ${unitWord()}`;
+    return `${fmtInt(Math.ceil(lo - s.pop - 1e-9))} too few ${unitWord()}`;
+  }
+  return null;
+}
+
+const isLegal = (s) => s.tiles.length > 0 && s.connected && s.popOk;
+
+// ---------- Loading maps ----------
 function randomSeed() {
   return Math.floor(Math.random() * 1000000);
 }
@@ -689,7 +737,6 @@ function loadMap(map) {
   renderLegend();
   buildBoard();
   buildDistrictList();
-  renderGoal();
   render();
 }
 
@@ -710,80 +757,92 @@ function buildBoard() {
   const { cols, rows } = game.cfg;
   const w = PAD * 2 + SQRT3 * HEX * (cols + 0.5);
   const h = PAD * 2 + HEX * 2 + 1.5 * HEX * (rows - 1);
-  const board = els.board;
-  board.setAttribute('viewBox', `0 0 ${w.toFixed(1)} ${h.toFixed(1)}`);
-  board.style.maxWidth = `${Math.round(w * 1.25)}px`;
-  board.style.margin = '0 auto';
-  board.innerHTML = '';
+  els.board.setAttribute('viewBox', `0 0 ${w.toFixed(1)} ${h.toFixed(1)}`);
+  els.board.innerHTML = '';
 
   const gTiles = svgEl('g');
   tileEls = game.tiles.map((t) => {
     const g = svgEl('g', { class: 'tile', 'data-id': t.id });
     const poly = svgEl('polygon', { class: 'hex', points: hexPoints(t.x, t.y, HEX) });
-    const ring = svgEl('polygon', { class: 'ring', points: hexPoints(t.x, t.y, HEX - 4.5) });
-    const pop = svgEl('text', { class: 'pop', x: t.x, y: t.y + 5 });
-    const lean = svgEl('text', { class: 'lean', x: t.x, y: t.y + 18 });
-    if (game.mode === 'voters') {
-      pop.setAttribute('y', t.y + 9);
-      pop.textContent = supports(t) ? '✓' : '✗';
-    } else if (game.mode === 'binary') {
-      pop.textContent = fmtInt(t.pop);
-      lean.textContent = supports(t) ? '✓' : '✗';
-    } else {
-      pop.textContent = fmtK(t.pop);
-      lean.textContent = t.lean + '%';
-    }
-    g.append(poly, ring, pop, lean);
+    const main = svgEl('text', { class: 'num', x: t.x, y: t.y + 7 });
+    const sub = svgEl('text', { class: 'sub', x: t.x, y: t.y + 21 });
+    g.append(poly, main, sub);
     gTiles.append(g);
-    return { g, poly, ring, pop, lean };
+    return { g, poly, main, sub };
   });
-  els.borders = svgEl('path', { class: 'borders' });
-  els.labels = svgEl('g', { class: 'labels' });
-  board.append(gTiles, els.borders, els.labels);
+  els.defs = svgEl('defs');
+  els.borderGroup = svgEl('g', { class: 'district-borders' });
+  els.badges = svgEl('g', { class: 'badges' });
+  els.board.append(els.defs, gTiles, els.borderGroup, els.badges);
+}
+
+function tileText(t) {
+  if (game.mode === 'voters') return [supports(t) ? '✓' : '✗', ''];
+  if (game.mode === 'binary') return [fmtInt(t.pop), supports(t) ? '✓' : '✗'];
+  return ui.label === 'pop' ? [fmtK(t.pop), ''] : [t.lean + '%', ''];
 }
 
 function renderTiles() {
+  const focus = typeof ui.tool === 'number' ? ui.tool : null;
   for (const t of game.tiles) {
     const el = tileEls[t.id];
     const d = ui.assign[t.id];
-    let fill;
-    if (ui.view === 'votes') fill = leanColor(t.lean);
-    else fill = d >= 0 ? DISTRICT_COLORS[d] : null;
-
+    const fill = ui.view === 'votes' ? leanColor(t.lean) : d >= 0 ? DISTRICT_COLORS[d] : null;
     el.poly.style.fill = fill || 'var(--unassigned)';
-    const textClass = fill ? (isDark(fill) ? 'on-dark' : 'on-light') : '';
-    el.pop.setAttribute('class', (game.mode === 'voters' ? 'pop mark ' : 'pop ') + textClass);
-    el.lean.setAttribute('class', 'lean ' + textClass);
 
-    if (ui.view === 'votes' && d >= 0) {
-      el.ring.style.stroke = DISTRICT_COLORS[d];
-      el.ring.style.display = '';
-    } else {
-      el.ring.style.display = 'none';
-    }
+    const [main, sub] = tileText(t);
+    const tone = fill ? (isDark(fill) ? ' on-dark' : ' on-light') : '';
+    el.main.textContent = main;
+    el.sub.textContent = sub;
+    el.main.setAttribute('class', 'num' + (game.mode === 'voters' ? ' mark' : '') + tone);
+    el.main.setAttribute('y', sub ? t.y + 5 : t.y + 8);
+    el.sub.setAttribute('class', 'sub' + tone);
+
+    // Lightly fade tiles that belong to a district other than the selected one.
+    el.g.classList.toggle('faded', focus !== null && d >= 0 && d !== focus);
   }
 }
 
+// Each district gets an outline in its own colour. The stroke is centred on
+// the boundary and clipped to the district's tiles, so only the inner half
+// shows and neighbouring districts' outlines sit side by side.
 function renderBorders() {
-  let path = '';
+  const n = game.cfg.districts;
+  const paths = new Array(n).fill('');
+  const clips = range(n).map(() => []);
   for (const t of game.tiles) {
     const a = ui.assign[t.id];
+    if (a < 0) continue;
+    clips[a].push(hexPoints(t.x, t.y, HEX + 0.5));
     for (let i = 0; i < 6; i++) {
       const j = t.nbrs[i];
-      if (j >= 0 && j < t.id) continue; // each shared edge is drawn once
-      const b = j >= 0 ? ui.assign[j] : -1;
-      if (a === b) continue;
-      if (j < 0 && a < 0) continue;
+      if (j >= 0 && ui.assign[j] === a) continue;
       const [x1, y1] = hexCorner(t.x, t.y, HEX, i);
       const [x2, y2] = hexCorner(t.x, t.y, HEX, (i + 1) % 6);
-      path += `M${x1.toFixed(1)} ${y1.toFixed(1)}L${x2.toFixed(1)} ${y2.toFixed(1)}`;
+      paths[a] += `M${x1.toFixed(1)} ${y1.toFixed(1)}L${x2.toFixed(1)} ${y2.toFixed(1)}`;
     }
   }
-  els.borders.setAttribute('d', path);
+  els.defs.innerHTML = '';
+  els.borderGroup.innerHTML = '';
+  for (let d = 0; d < n; d++) {
+    if (!paths[d]) continue;
+    const clip = svgEl('clipPath', { id: `district-clip-${d}` });
+    for (const pts of clips[d]) clip.append(svgEl('polygon', { points: pts }));
+    els.defs.append(clip);
+    els.borderGroup.append(svgEl('path', {
+      d: paths[d],
+      class: 'dborder' + (focus() === d ? ' focused' : ''),
+      stroke: DISTRICT_COLORS[d],
+      'clip-path': `url(#district-clip-${d})`,
+    }));
+  }
 }
 
-function renderLabels(stats) {
-  els.labels.innerHTML = '';
+const focus = () => (typeof ui.tool === 'number' ? ui.tool : null);
+
+// A badge on each district: its number, then its result (green = you lead).
+function renderBadges(stats) {
+  els.badges.innerHTML = '';
   stats.forEach((s, d) => {
     if (!s.tiles.length) return;
     const cx = s.tiles.reduce((sum, i) => sum + game.tiles[i].x, 0) / s.tiles.length;
@@ -795,36 +854,108 @@ function renderLabels(stats) {
       if (dist < bestDist) { bestDist = dist; best = i; }
     }
     const t = game.tiles[best];
-    const circle = svgEl('circle', { cx: t.x, cy: t.y - 15, r: 9, fill: DISTRICT_COLORS[d] });
-    const text = svgEl('text', { x: t.x, y: t.y - 11.3 });
-    text.textContent = d + 1;
-    els.labels.append(circle, text);
+    const y = t.y - 17;
+    const r = 9;
+
+    const g = svgEl('g', { class: 'badge' });
+    const pill = svgEl('rect', { y: y - r, height: r * 2, rx: r, fill: s.wins ? WIN_COLOR : LOSE_COLOR });
+    const value = svgEl('text', { class: 'b-val', y: y + 4 });
+    value.textContent = (isLegal(s) ? '' : '⚠ ') + shareShort(s);
+    const dot = svgEl('circle', { r, cy: y, fill: DISTRICT_COLORS[d] });
+    const num = svgEl('text', { class: 'b-num', y: y + 4 });
+    num.textContent = d + 1;
+    g.append(pill, value, dot, num);
+    els.badges.append(g);
+
+    let textW = 0;
+    try { textW = value.getComputedTextLength(); } catch (e) { /* not rendered */ }
+    if (!textW) textW = value.textContent.length * 6.5;
+    const width = r * 2 + textW + 9;
+    const x0 = t.x - width / 2;
+    pill.setAttribute('x', x0);
+    pill.setAttribute('width', width);
+    dot.setAttribute('cx', x0 + r);
+    num.setAttribute('x', x0 + r);
+    value.setAttribute('x', x0 + r * 2 + 3);
   });
 }
 
-// ---------- Sidebar rendering ----------
-function renderGoal() {
-  const tol = game.tolerance;
-  const lo = Math.ceil(game.ideal * (1 - tol) - 1e-9);
-  const hi = Math.floor(game.ideal * (1 + tol) + 1e-9);
-  const yes = Math.round(game.statewideShare * game.totalPop);
-  let html = '<h2>Your mission</h2>';
+// ---------- Tooltip ----------
+function showTooltip(id, e) {
+  if (id == null) {
+    els.tooltip.hidden = true;
+    return;
+  }
+  const t = game.tiles[id];
+  const d = ui.assign[id];
+  const who = supports(t) ? 'your candidate' : 'the opponent';
+  let body;
+  if (game.mode === 'voters') body = `One voter for ${who}`;
+  else if (game.mode === 'binary') body = `${fmtInt(t.pop)} ${t.pop === 1 ? 'person' : 'people'}, all voting for ${who}`;
+  else body = `Population ${fmtInt(t.pop)}<br>You ${t.lean}% · Opponent ${100 - t.lean}%`;
+  const title = d >= 0
+    ? `<span class="tt-dot" style="background:${DISTRICT_COLORS[d]}"></span>District ${d + 1}`
+    : 'Not in a district';
+  els.tooltip.innerHTML = `<strong>${title}</strong><br>${body}`;
+  els.tooltip.hidden = false;
+
+  const area = els.boardArea.getBoundingClientRect();
+  const tw = els.tooltip.offsetWidth;
+  const th = els.tooltip.offsetHeight;
+  let x = e.clientX - area.left + 16;
+  let y = e.clientY - area.top + 16;
+  if (x + tw > area.width) x = e.clientX - area.left - tw - 16;
+  if (y + th > area.height) y = e.clientY - area.top - th - 16;
+  els.tooltip.style.left = `${Math.max(0, x)}px`;
+  els.tooltip.style.top = `${Math.max(0, y)}px`;
+}
+
+// ---------- Status bar, mission and district list ----------
+function renderStatus(stats) {
+  const n = game.cfg.districts;
+  const seats = stats.filter((s) => s.wins).length;
+  const legal = stats.filter(isLegal).length;
+  const assigned = ui.assign.filter((d) => d >= 0).length;
+  els.stSeats.innerHTML =
+    `<strong class="${seats >= game.target ? 'ok' : ''}">${seats}</strong> of ${n} <span class="need">need ${game.target}</span>`;
+  els.stLegal.innerHTML = `<strong class="${legal === n ? 'ok' : ''}">${legal}</strong> of ${n}`;
+  els.stTiles.innerHTML =
+    `<strong class="${assigned === game.tiles.length ? 'ok' : ''}">${assigned}</strong> of ${game.tiles.length}`;
+}
+
+function renderMission(stats) {
+  const n = game.cfg.districts;
+  const T = game.tiles.length;
+  const assigned = ui.assign.filter((d) => d >= 0).length;
+  const connected = stats.filter((s) => s.tiles.length && s.connected).length;
+  const sized = stats.filter((s) => s.popOk).length;
+  const seats = stats.filter((s) => s.wins).length;
+
+  let intro;
   if (game.mode === 'percent') {
-    html += `<p>Your candidate expects <strong>${fmtPct(game.statewideShare)}</strong> of the statewide vote.</p>`;
+    intro = `Your candidate expects <strong>${fmtPct(game.statewideShare)}</strong> of the statewide vote.`;
   } else {
-    html += `<p>Your candidate has <strong>${fmtInt(yes)} of ${fmtInt(game.totalPop)}</strong> ${unitWord()}
-             (${fmtPct(game.statewideShare, 0)}).</p>`;
+    const yes = Math.round(game.statewideShare * game.totalPop);
+    intro = `Your candidate has <strong>${fmtInt(yes)} of ${fmtInt(game.totalPop)}</strong> ${unitWord()}
+             (${fmtPct(game.statewideShare, 0)}).`;
   }
-  html += `<p>Draw <strong>${game.cfg.districts}</strong> districts and win at least <strong>${game.target}</strong> of them.
-           A district goes to whoever has more ${game.mode === 'percent' ? 'votes' : unitWord()} in it.</p>`;
-  if (tol === 0) {
-    html += `<p>Every district must be connected and have exactly <strong>${fmtInt(game.ideal)}</strong> ${unitWord()}.</p>`;
-  } else {
-    html += `<p>Every district must be connected with <strong>${fmtInt(lo)}–${fmtInt(hi)}</strong> people
-             (ideal ${fmtInt(game.ideal)}, ±${Math.round(tol * 100)}%).</p>`;
+  const items = [
+    [assigned === T, 'Put every tile in a district', `${assigned} / ${T}`],
+    [connected === n, `Keep each district in one piece`, `${connected} / ${n}`],
+    [sized === n, `Give each district ${popRangeText()}`, `${sized} / ${n}`],
+    [seats >= game.target, `Win at least ${game.target} of ${n} seats`, `${seats} now`],
+  ];
+  let html = `<h2>Your mission</h2><p>${intro}</p><ul class="checklist">`;
+  for (const [done, text, count] of items) {
+    html += `<li class="${done ? 'done' : ''}">
+      <span class="check" aria-hidden="true">${done ? '✓' : ''}</span>
+      <span class="c-text">${text}</span>
+      <span class="c-count">${count}</span>
+      <span class="sr-only">${done ? '(done)' : '(not yet)'}</span></li>`;
   }
+  html += '</ul>';
   if (game.lesson == null) {
-    html += `<p class="muted">Difficulty: ${difficultyText()}</p><p class="muted">Map #${game.seed}</p>`;
+    html += `<p class="muted small">Difficulty: ${difficultyText()} · Map #${game.seed}</p>`;
   }
   els.goal.innerHTML = html;
 }
@@ -847,69 +978,69 @@ function buildDistrictList() {
       <span class="d-main">
         <span class="d-pop"></span>
         <span class="pop-bar"><span class="band"></span><span class="fill"></span></span>
-        <span class="d-issue"></span>
+        <span class="d-status"></span>
       </span>
-      <span class="d-share"></span>`;
+      <span class="d-vote"><span class="v-main"></span><span class="v-sub"></span></span>`;
     btn.addEventListener('click', () => setTool(d));
     els.districtList.append(btn);
   }
+  els.districtHead.lastElementChild.textContent = game.mode === 'percent' ? 'Vote for you' : 'For / against';
 }
 
 function renderDistrictList(stats) {
-  const scale = 1.25; // bar covers 0 – 125% of ideal
+  const scale = 1.25; // the bar covers 0–125% of the ideal population
+  const tol = game.tolerance;
   const rows = els.districtList.querySelectorAll('.district-row');
   stats.forEach((s, d) => {
     const row = rows[d];
     row.classList.toggle('active', ui.tool === d);
     const popEl = row.querySelector('.d-pop');
-    const shareEl = row.querySelector('.d-share');
-    const issueEl = row.querySelector('.d-issue');
+    const statusEl = row.querySelector('.d-status');
+    const vMain = row.querySelector('.v-main');
+    const vSub = row.querySelector('.v-sub');
     const fill = row.querySelector('.fill');
     const band = row.querySelector('.band');
 
-    const tol = game.tolerance;
     band.style.left = `${((1 - tol) / scale) * 100}%`;
     band.style.width = `${Math.max((2 * tol) / scale, 0.01) * 100}%`;
     fill.style.width = `${Math.min(s.pop / game.ideal / scale, 1) * 100}%`;
     fill.className = 'fill ' + (s.popOk ? 'ok' : s.dev > tol ? 'over' : '');
 
+    const issue = districtIssue(s);
     if (!s.tiles.length) {
-      popEl.innerHTML = '<span class="muted">Empty</span>';
-      shareEl.textContent = '—';
-      shareEl.className = 'd-share muted';
-      issueEl.textContent = '';
+      popEl.innerHTML = `<span class="muted">0 ${unitWord()}</span>`;
+      statusEl.className = 'd-status muted';
+      statusEl.textContent = 'Empty';
+      vMain.textContent = '—';
+      vMain.className = 'v-main muted';
+      vSub.textContent = '';
       return;
     }
     if (game.mode === 'voters') {
-      popEl.innerHTML = `<span class="${s.popOk ? 'ok' : 'bad'}">${s.pop} of ${fmtInt(game.ideal)} voters</span>`;
+      popEl.textContent = `${s.pop} of ${fmtInt(game.ideal)} voters`;
     } else {
-      popEl.innerHTML = `${fmtInt(s.pop)} <small class="${s.popOk ? 'ok' : 'bad'}">${fmtSigned(s.dev)}</small>`;
+      popEl.innerHTML = `${fmtInt(s.pop)} people <small>(${fmtSigned(s.dev)})</small>`;
     }
-    shareEl.textContent = shareText(s);
-    shareEl.className = 'd-share ' + (s.wins ? 'win' : 'lose');
-    shareEl.title = (s.wins ? 'Your candidate leads' : 'Opponent leads') +
-      (game.mode === 'percent' ? '' : ` (${unitWord()} for you – against you)`);
-    issueEl.textContent = s.connected ? '' : 'Not connected';
+    statusEl.className = 'd-status ' + (issue ? 'bad' : 'ok');
+    statusEl.textContent = issue ? `⚠ ${issue}` : '✓ Legal';
+
+    vMain.className = 'v-main ' + (s.wins ? 'win' : 'lose');
+    if (game.mode === 'percent') {
+      vMain.textContent = fmtPct(s.share);
+      vSub.textContent = s.wins ? 'you lead' : 'opponent leads';
+    } else {
+      vMain.textContent = `${votesFor(s)} for`;
+      vSub.textContent = `${votesAgainst(s)} against`;
+    }
   });
   els.eraser.classList.toggle('active', ui.tool === 'erase');
 }
 
-function renderSummary(stats) {
-  const assigned = ui.assign.filter((d) => d >= 0).length;
-  const seats = stats.filter((s) => s.wins).length;
-  const valid = stats.filter((s) => s.popOk && s.connected).length;
-  els.summary.innerHTML = `
-    <h2>Projection</h2>
-    <div class="stat-grid">
-      <div class="stat"><span class="label">Seats won</span>
-        <span class="value ${seats >= game.target ? 'ok' : ''}">${seats} / ${game.cfg.districts}</span></div>
-      <div class="stat"><span class="label">Needed</span>
-        <span class="value">${game.target}</span></div>
-      <div class="stat"><span class="label">Tiles assigned</span>
-        <span class="value">${assigned} / ${game.tiles.length}</span></div>
-      <div class="stat"><span class="label">Valid districts</span>
-        <span class="value ${valid === game.cfg.districts ? 'ok' : ''}">${valid} / ${game.cfg.districts}</span></div>
-    </div>`;
+function renderControls() {
+  for (const btn of els.viewButtons) btn.setAttribute('aria-pressed', String(btn.dataset.view === ui.view));
+  for (const btn of els.labelButtons) btn.setAttribute('aria-pressed', String(btn.dataset.label === ui.label));
+  els.labelToggle.hidden = game.mode !== 'percent';
+  els.legend.classList.toggle('hidden', ui.view !== 'votes');
 }
 
 function currentStats() {
@@ -921,31 +1052,27 @@ function render() {
   const stats = currentStats();
   renderTiles();
   renderBorders();
-  renderLabels(stats);
+  renderBadges(stats);
+  renderStatus(stats);
+  renderMission(stats);
   renderDistrictList(stats);
-  renderSummary(stats);
-  els.toggleView.textContent = ui.view === 'votes' ? 'Show districts' : 'Show voters';
-  els.legend.classList.toggle('hidden', ui.view !== 'votes');
-}
-
-function showTileInfo(id) {
-  if (id == null) {
-    els.tileInfo.textContent = 'Hover over a tile to see its details.';
-    return;
-  }
-  const t = game.tiles[id];
-  const d = ui.assign[id];
-  const who = supports(t) ? 'your candidate' : 'the opponent';
-  let text;
-  if (game.mode === 'voters') text = `One voter for ${who}`;
-  else if (game.mode === 'binary') text = `${fmtInt(t.pop)} ${t.pop === 1 ? 'person' : 'people'}, all voting for ${who}`;
-  else text = `Population ${fmtInt(t.pop)} · Your candidate ${t.lean}% · Opponent ${100 - t.lean}%`;
-  els.tileInfo.textContent = text + ' · ' + (d >= 0 ? `District ${d + 1}` : 'Unassigned');
+  renderControls();
 }
 
 // ---------- Interaction ----------
 function setTool(tool) {
   ui.tool = tool;
+  render();
+}
+
+function setView(view) {
+  ui.view = view;
+  render();
+}
+
+function setLabel(label) {
+  ui.label = label;
+  storageSet(LABEL_KEY, label);
   render();
 }
 
@@ -968,7 +1095,7 @@ function applyPaint(id) {
 function bindEvents() {
   els.board.addEventListener('pointerdown', (e) => {
     const id = tileAt(e);
-    if (id == null || (e.button !== undefined && e.button !== 0)) return;
+    if (!game || id == null || (e.button !== undefined && e.button !== 0)) return;
     e.preventDefault();
     ui.painting = ui.tool === 'erase' || ui.assign[id] === ui.tool ? 'erase' : 'paint';
     ui.lastPainted = null;
@@ -976,27 +1103,27 @@ function bindEvents() {
     applyPaint(id);
   });
   els.board.addEventListener('pointermove', (e) => {
+    if (!game) return;
     const id = tileAt(e);
-    showTileInfo(id);
+    showTooltip(id, e);
     if (ui.painting) applyPaint(id);
   });
-  els.board.addEventListener('pointerleave', () => { if (!ui.painting) showTileInfo(null); });
+  els.board.addEventListener('pointerleave', () => showTooltip(null));
   const stop = () => { ui.painting = null; ui.lastPainted = null; };
   window.addEventListener('pointerup', stop);
   window.addEventListener('pointercancel', stop);
 
   els.eraser.addEventListener('click', () => setTool('erase'));
   els.reset.addEventListener('click', () => {
+    if (!game) return;
     if (ui.assign.some((d) => d >= 0) && !window.confirm('Clear all districts on this map?')) return;
     ui.assign.fill(-1);
     render();
   });
   els.newMap.addEventListener('click', () => startGame(els.size.value, randomSeed()));
   els.size.addEventListener('change', () => startGame(els.size.value, randomSeed()));
-  els.toggleView.addEventListener('click', () => {
-    ui.view = ui.view === 'votes' ? 'districts' : 'votes';
-    render();
-  });
+  for (const btn of els.viewButtons) btn.addEventListener('click', () => setView(btn.dataset.view));
+  for (const btn of els.labelButtons) btn.addEventListener('click', () => setLabel(btn.dataset.label));
   els.submit.addEventListener('click', holdElection);
   els.tutorialBtn.addEventListener('click', () => startLesson(Math.min(lessonsCompleted(), TUTORIAL.length - 1)));
   els.skipTutorial.addEventListener('click', leaveTutorial);
@@ -1007,7 +1134,8 @@ function bindEvents() {
     const num = Number(e.key);
     if (Number.isInteger(num) && num >= 1 && num <= game.cfg.districts) setTool(num - 1);
     else if (e.key === 'e' || e.key === 'E') setTool('erase');
-    else if (e.key === 'v' || e.key === 'V') els.toggleView.click();
+    else if (e.key === 'v' || e.key === 'V') setView(ui.view === 'votes' ? 'districts' : 'votes');
+    else if ((e.key === 'l' || e.key === 'L') && game.mode === 'percent') setLabel(ui.label === 'lean' ? 'pop' : 'lean');
   });
 }
 
@@ -1017,17 +1145,10 @@ function validatePlan(stats) {
   const unassigned = ui.assign.filter((d) => d < 0).length;
   if (unassigned) problems.push(`${unassigned} tile${unassigned === 1 ? ' is' : 's are'} not in any district.`);
   stats.forEach((s, d) => {
-    const name = `District ${d + 1}`;
-    if (!s.tiles.length) {
-      problems.push(`${name} has no tiles.`);
-      return;
-    }
-    if (!s.connected) problems.push(`${name} is split into separate pieces.`);
-    if (!s.popOk && game.tolerance === 0) {
-      problems.push(`${name} has ${fmtInt(s.pop)} ${unitWord()}; every district needs exactly ${fmtInt(game.ideal)}.`);
-    } else if (!s.popOk) {
-      problems.push(`${name} has ${fmtInt(s.pop)} people (${fmtSigned(s.dev)}); it must be within ±${Math.round(game.tolerance * 100)}% of ${fmtInt(game.ideal)}.`);
-    }
+    const issue = districtIssue(s);
+    if (!issue) return;
+    const extra = !s.popOk && s.tiles.length && s.connected ? ` It needs ${popRangeText()}.` : '';
+    problems.push(`District ${d + 1}: ${issue.charAt(0).toLowerCase() + issue.slice(1)}.${extra}`);
   });
   return problems;
 }
@@ -1070,12 +1191,12 @@ function holdElection() {
       <td><span class="dot" style="background:${DISTRICT_COLORS[d]}"></span>District ${d + 1}</td>
       <td class="num">${fmtInt(s.pop)}</td>
       <td class="num">${shareText(s)}</td>
-      <td class="${s.wins ? 'win' : 'lose'}">${s.wins ? 'You' : 'Opponent'}</td>
+      <td class="${s.wins ? 'win' : 'lose'}">${s.wins ? '✓ You' : '✗ Opponent'}</td>
     </tr>`).join('');
 
   const lesson = game.lesson != null ? TUTORIAL[game.lesson] : null;
   const unitHeader = game.mode === 'voters' ? 'Voters' : 'Population';
-  const voteHeader = game.mode === 'percent' ? 'Your vote' : 'For – against';
+  const voteHeader = game.mode === 'percent' ? 'Your vote' : 'Votes';
   const title = lesson ? (won ? 'Lesson complete!' : 'Not quite') : won ? 'Victory!' : 'Defeat';
   const body = `
     <h2>${title}</h2>
@@ -1088,12 +1209,13 @@ function holdElection() {
     </table>
     ${lesson && won ? `<p class="debrief">${lesson.debrief}</p>` : ''}`;
 
+  let actions;
   if (lesson) {
     const index = game.lesson;
     if (won) completeLesson(index);
     renderLesson();
     const last = index === TUTORIAL.length - 1;
-    const actions = won
+    actions = won
       ? [
           { label: 'Keep editing' },
           last
@@ -1104,19 +1226,17 @@ function holdElection() {
           { label: 'Show a winning plan', onClick: revealSolution },
           { label: 'Keep trying', primary: true },
         ];
-    openDialog(body, actions);
-    return;
+  } else {
+    actions = won
+      ? [
+          { label: 'Keep editing' },
+          { label: 'Next map', primary: true, onClick: () => startGame(els.size.value, randomSeed()) },
+        ]
+      : [
+          { label: 'Show a winning plan', onClick: revealSolution },
+          { label: 'Keep trying', primary: true },
+        ];
   }
-
-  const actions = won
-    ? [
-        { label: 'Keep editing' },
-        { label: 'Next map', primary: true, onClick: () => startGame(els.size.value, randomSeed()) },
-      ]
-    : [
-        { label: 'Show a winning plan', onClick: revealSolution },
-        { label: 'Keep trying', primary: true },
-      ];
   openDialog(body, actions);
 }
 
@@ -1129,16 +1249,22 @@ function revealSolution() {
 // ---------- Start ----------
 function init() {
   els.board = $('#board');
+  els.boardArea = $('#board-area');
+  els.tooltip = $('#tooltip');
   els.size = $('#size-select');
   els.newMap = $('#new-map');
   els.reset = $('#reset');
-  els.toggleView = $('#toggle-view');
+  els.viewButtons = document.querySelectorAll('[data-view]');
+  els.labelButtons = document.querySelectorAll('[data-label]');
+  els.labelToggle = $('#label-toggle');
   els.submit = $('#submit');
+  els.stSeats = $('#st-seats');
+  els.stLegal = $('#st-legal');
+  els.stTiles = $('#st-tiles');
   els.goal = $('#goal');
+  els.districtHead = $('#district-head');
   els.districtList = $('#district-list');
   els.eraser = $('#eraser-btn');
-  els.summary = $('#summary');
-  els.tileInfo = $('#tile-info');
   els.legend = $('#legend');
   els.dialog = $('#result-dialog');
   els.dialogBody = $('#result-body');
@@ -1158,6 +1284,7 @@ function init() {
     opt.textContent = cfg.label;
     els.size.append(opt);
   }
+  if (storageGet(LABEL_KEY) === 'pop') ui.label = 'pop';
 
   const params = new URLSearchParams(window.location.search);
   const sizeKey = SIZES[params.get('size')] ? params.get('size') : 'medium';

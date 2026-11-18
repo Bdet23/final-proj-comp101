@@ -13,16 +13,13 @@
       <h1>Gerrymander</h1>
       <span class="subtitle">Draw the lines. Win the seats.</span>
     </div>
-    <div class="controls">
+    <nav class="controls" aria-label="Game options">
       <label class="size-label">Map
         <select id="size-select"></select>
       </label>
-      <button id="tutorial-btn" type="button">Tutorial</button>
-      <button id="new-map" type="button">New map</button>
-      <button id="reset" type="button">Clear districts</button>
-      <button id="toggle-view" type="button">Show districts</button>
-      <button id="submit" type="button" class="primary">Hold election</button>
-    </div>
+      <button id="new-map" type="button" class="secondary">New map</button>
+      <button id="tutorial-btn" type="button" class="secondary">Tutorial</button>
+    </nav>
   </header>
 
   <main class="layout">
@@ -37,10 +34,43 @@
         <p id="lesson-intro"></p>
         <p id="lesson-tip" class="lesson-tip"></p>
       </div>
-      <svg id="board" role="img" aria-label="Hex map of the state"></svg>
-      <div id="loading" class="loading" hidden>Generating map…</div>
+
+      <div class="statusbar">
+        <div class="status-item">
+          <span class="s-label">Seats won</span>
+          <span class="s-value" id="st-seats"></span>
+        </div>
+        <div class="status-item">
+          <span class="s-label">Legal districts</span>
+          <span class="s-value" id="st-legal"></span>
+        </div>
+        <div class="status-item">
+          <span class="s-label">Tiles assigned</span>
+          <span class="s-value" id="st-tiles"></span>
+        </div>
+        <button id="submit" type="button" class="primary">Hold election</button>
+      </div>
+
+      <div class="board-toolbar">
+        <div class="segmented" role="group" aria-label="Colour tiles by">
+          <span class="seg-label">Colour</span>
+          <button type="button" data-view="votes">Voters</button>
+          <button type="button" data-view="districts">Districts</button>
+        </div>
+        <div class="segmented" id="label-toggle" role="group" aria-label="Number shown on tiles">
+          <span class="seg-label">Show</span>
+          <button type="button" data-label="lean">Vote %</button>
+          <button type="button" data-label="pop">Population</button>
+        </div>
+        <button id="reset" type="button" class="ghost">Clear districts</button>
+      </div>
+
+      <div class="board-area" id="board-area">
+        <svg id="board" role="img" aria-label="Hex map of the state"></svg>
+        <div id="tooltip" class="tooltip" role="status" hidden></div>
+        <div id="loading" class="loading" hidden>Generating map…</div>
+      </div>
       <div class="legend" id="legend"></div>
-      <p id="tile-info" class="tile-info">Hover over a tile to see its details.</p>
     </section>
 
     <aside class="sidebar">
@@ -49,21 +79,22 @@
       <div class="card">
         <h2>Districts</h2>
         <p class="hint">Pick a district, then click or drag across tiles to paint them. Click a painted tile again to remove it.</p>
+        <div class="district-head" id="district-head" aria-hidden="true">
+          <span>#</span><span>Population</span><span>Vote for you</span>
+        </div>
         <div id="district-list" class="district-list"></div>
         <button id="eraser-btn" type="button" class="tool-btn">Eraser <kbd>E</kbd></button>
       </div>
 
-      <div class="card" id="summary"></div>
-
       <details class="card how">
         <summary>How to play</summary>
         <ul>
-          <li>Each hex is a neighborhood. The big number is its population; the percentage is the share of voters expected to vote for <strong>your candidate</strong>.</li>
+          <li>Each hex is a neighbourhood with a population and a share of people who vote for <strong>your candidate</strong>. Hover over a tile for details.</li>
           <li>Split the whole map into the required number of districts. Every tile must belong to a district.</li>
-          <li>Each district must be one connected piece and its population must be within ±5% of the ideal size.</li>
-          <li>Your candidate wins a district when more than 50% of its voters support them.</li>
+          <li>Each district must be one connected piece and its population must be within the allowed range.</li>
+          <li>Your candidate wins a district when more than 50% of its voters support them. The badge on each district shows its result: green means you lead.</li>
           <li>Win at least the target number of districts, even though your candidate has fewer votes statewide.</li>
-          <li>Shortcuts: <kbd>1</kbd>–<kbd>8</kbd> pick a district, <kbd>E</kbd> eraser, <kbd>V</kbd> switch view.</li>
+          <li>Shortcuts: <kbd>1</kbd>–<kbd>8</kbd> pick a district, <kbd>E</kbd> eraser, <kbd>V</kbd> switch colours, <kbd>L</kbd> switch tile numbers.</li>
         </ul>
       </details>
     </aside>
