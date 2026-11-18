@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Gerrymander</title>
   <meta name="description" content="Draw district lines on a hex map so your candidate wins the most seats.">
-  <link rel="stylesheet" href="style.css?v=6">
+  <link rel="stylesheet" href="style.css?v=7">
 </head>
 <body>
   <header class="topbar">
@@ -56,6 +56,7 @@
           <span class="seg-label">Colour</span>
           <button type="button" data-view="votes">Voters</button>
           <button type="button" data-view="districts">Districts</button>
+          <button type="button" data-view="results">Results</button>
         </div>
         <div class="segmented" id="label-toggle" role="group" aria-label="Number shown on tiles">
           <span class="seg-label">Show</span>
@@ -95,7 +96,7 @@
           <li>Each district must be one connected piece and its population must be within the allowed range.</li>
           <li>Your candidate wins a district when more than 50% of its voters support them. The badge on each district shows its result: green means you lead.</li>
           <li>Win at least the target number of districts, even though your candidate has fewer votes statewide.</li>
-          <li>Shortcuts: <kbd>1</kbd>–<kbd>8</kbd> pick a district, <kbd>E</kbd> eraser, <kbd>V</kbd> switch colours, <kbd>L</kbd> cycle tile numbers.</li>
+          <li>Shortcuts: <kbd>1</kbd>–<kbd>8</kbd> pick a district, <kbd>E</kbd> eraser, <kbd>V</kbd> cycle colours (voters, districts, results), <kbd>L</kbd> cycle tile numbers.</li>
         </ul>
       </details>
     </aside>
@@ -106,6 +107,6 @@
     <div class="dialog-actions" id="result-actions"></div>
   </dialog>
 
-  <script src="game.js?v=6"></script>
+  <script src="game.js?v=7"></script>
 </body>
 </html>

@@ -543,7 +543,7 @@ let game = null;
 const ui = {
   assign: [],
   tool: 0,            // district index, or 'erase'
-  view: 'votes',      // tile colour: 'votes' or 'districts'
+  view: 'votes',      // tile colour: 'votes', 'districts' or 'results'
   label: 'lean',      // tile numbers on full maps: 'lean' (vote %), 'pop' or 'both'
   painting: null,
   lastPainted: null,
@@ -563,8 +563,9 @@ function svgEl(tag, attrs = {}) {
   return el;
 }
 
-function leanColor(pct) {
-  const t = Math.max(-1, Math.min(1, (pct - 50) / 30));
+// span: how many points from 50% reach full colour.
+function leanColor(pct, span = 30) {
+  const t = Math.max(-1, Math.min(1, (pct - 50) / span));
   const target = t >= 0 ? PLAYER_RGB : OPPONENT_RGB;
   const a = Math.abs(t);
   const rgb = NEUTRAL_RGB.map((v, i) => Math.round(v + (target[i] - v) * a));
@@ -734,16 +735,22 @@ function loadMap(map) {
     window.history.replaceState(null, '', url);
   } catch (e) { /* URL updates are optional */ }
   renderLesson();
-  renderLegend();
   buildBoard();
   buildDistrictList();
   render();
 }
 
+const RESULT_SPAN = 20; // district results reach full colour at a 20-point lead
+
 function renderLegend() {
   const opp = `rgb(${OPPONENT_RGB.join(',')})`;
   const you = `rgb(${PLAYER_RGB.join(',')})`;
-  if (game.mode === 'percent') {
+  if (ui.view === 'results') {
+    els.legend.innerHTML = `
+      <span>Opponent wins big</span>
+      <span class="legend-scale"><span class="legend-bar" aria-hidden="true"></span><span class="legend-mid">close</span></span>
+      <span>You win big</span>`;
+  } else if (game.mode === 'percent') {
     els.legend.innerHTML = `<span>Opponent</span><span class="legend-bar" aria-hidden="true"></span><span>Your candidate</span>`;
   } else {
     els.legend.innerHTML = `
@@ -783,12 +790,15 @@ function tileText(t) {
   return ui.label === 'pop' ? [fmtK(t.pop), ''] : [t.lean + '%', ''];
 }
 
-function renderTiles() {
+function renderTiles(stats) {
   const focus = typeof ui.tool === 'number' ? ui.tool : null;
   for (const t of game.tiles) {
     const el = tileEls[t.id];
     const d = ui.assign[t.id];
-    const fill = ui.view === 'votes' ? leanColor(t.lean) : d >= 0 ? DISTRICT_COLORS[d] : null;
+    let fill = null;
+    if (ui.view === 'votes') fill = leanColor(t.lean);
+    else if (d >= 0 && ui.view === 'districts') fill = DISTRICT_COLORS[d];
+    else if (d >= 0) fill = leanColor(stats[d].share * 100, RESULT_SPAN);
     el.poly.style.fill = fill || 'var(--unassigned)';
 
     const [main, sub] = tileText(t);
@@ -800,7 +810,8 @@ function renderTiles() {
     el.sub.setAttribute('class', 'sub' + tone);
 
     // Lightly fade tiles that belong to a district other than the selected one.
-    el.g.classList.toggle('faded', focus !== null && d >= 0 && d !== focus);
+    // (Not in results view, where each district's colour is its result.)
+    el.g.classList.toggle('faded', ui.view !== 'results' && focus !== null && d >= 0 && d !== focus);
   }
 }
 
@@ -897,7 +908,13 @@ function showTooltip(id, e) {
   const title = d >= 0
     ? `<span class="tt-dot" style="background:${DISTRICT_COLORS[d]}"></span>District ${d + 1}`
     : 'Not in a district';
-  els.tooltip.innerHTML = `<strong>${title}</strong><br>${body}`;
+  let result = '';
+  if (d >= 0) {
+    const s = currentStats()[d];
+    result = `<br><span class="tt-result">District: ${shareText(s)}${game.mode === 'percent' ? ' for you' : ''}
+      · ${s.wins ? 'you lead' : 'opponent leads'}</span>`;
+  }
+  els.tooltip.innerHTML = `<strong>${title}</strong><br>${body}${result}`;
   els.tooltip.hidden = false;
 
   const area = els.boardArea.getBoundingClientRect();
@@ -1041,7 +1058,8 @@ function renderControls() {
   for (const btn of els.viewButtons) btn.setAttribute('aria-pressed', String(btn.dataset.view === ui.view));
   for (const btn of els.labelButtons) btn.setAttribute('aria-pressed', String(btn.dataset.label === ui.label));
   els.labelToggle.hidden = game.mode !== 'percent';
-  els.legend.classList.toggle('hidden', ui.view !== 'votes');
+  renderLegend();
+  els.legend.classList.toggle('hidden', ui.view === 'districts');
 }
 
 function currentStats() {
@@ -1051,7 +1069,7 @@ function currentStats() {
 function render() {
   if (!game) return;
   const stats = currentStats();
-  renderTiles();
+  renderTiles(stats);
   renderBorders();
   renderBadges(stats);
   renderStatus(stats);
@@ -1135,7 +1153,10 @@ function bindEvents() {
     const num = Number(e.key);
     if (Number.isInteger(num) && num >= 1 && num <= game.cfg.districts) setTool(num - 1);
     else if (e.key === 'e' || e.key === 'E') setTool('erase');
-    else if (e.key === 'v' || e.key === 'V') setView(ui.view === 'votes' ? 'districts' : 'votes');
+    else if (e.key === 'v' || e.key === 'V') {
+      const order = ['votes', 'districts', 'results'];
+      setView(order[(order.indexOf(ui.view) + 1) % order.length]);
+    }
     else if ((e.key === 'l' || e.key === 'L') && game.mode === 'percent') {
       const order = ['lean', 'pop', 'both'];
       setLabel(order[(order.indexOf(ui.label) + 1) % order.length]);

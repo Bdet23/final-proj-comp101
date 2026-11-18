@@ -479,3 +479,19 @@ dialog li { margin-bottom: 0.3rem; }
   .board-toolbar .ghost { margin-left: 0; }
   #board { max-height: none; min-height: 0; }
 }
+
+/* Results colour mode */
+.legend-scale { position: relative; display: inline-flex; flex-direction: column; align-items: center; }
+.legend-scale .legend-bar { width: 200px; }
+.legend-scale::after {
+  content: "";
+  position: absolute;
+  top: -2px;
+  left: 50%;
+  width: 2px;
+  height: 14px;
+  background: var(--text);
+  transform: translateX(-50%);
+}
+.legend-mid { font-size: 0.75rem; line-height: 1.2; margin-top: 2px; }
+.tt-result { opacity: 0.85; }
