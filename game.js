@@ -155,7 +155,7 @@ const MAP_ATTEMPTS = 12;            // candidate maps tried per seed
 
 const lerp = (a, b, t) => a + (b - a) * t;
 
-function generateGeography(tiles, cfg, rand) {
+function generateGeography(tiles, cfg, rand, shareRange = null) {
   const maxX = Math.max(...tiles.map((t) => t.x));
   const maxY = Math.max(...tiles.map((t) => t.y));
   const step = SQRT3 * HEX; // distance between neighboring tile centers
@@ -214,7 +214,7 @@ function generateGeography(tiles, cfg, rand) {
   for (const t of tiles) lean[t.id] += (rand() - 0.5) * 0.1;
 
   // Shift everything so the player trails statewide (42–48%).
-  const targetShare = 0.42 + rand() * 0.06;
+  const targetShare = shareRange ? lerp(shareRange[0], shareRange[1], rand()) : 0.42 + rand() * 0.06;
   const clampLean = (x) => Math.min(0.94, Math.max(0.06, x));
   const totalPop = tiles.reduce((s, t) => s + t.pop, 0);
   const shareWith = (shift) => tiles.reduce((s, t) => s + t.pop * clampLean(lean[t.id] + shift), 0) / totalPop;
@@ -443,6 +443,288 @@ function generateMap(sizeKey, seed) {
   throw new Error('Could not generate a map for seed ' + seed);
 }
 
+// ---------- Realistic mode: uncertain elections ----------
+// Each simulated election shifts every tile's expected vote share by:
+//   a statewide swing (shared by every tile),
+//   regional swings (shared by nearby tiles),
+//   and a little local noise.
+// Because most of the swing is shared, narrow seats tend to fall together,
+// like a real "wave" election. A plan passes when its chance of reaching
+// the seat target is at least PASS_PROBABILITY.
+
+const SIMULATIONS = 1000;
+const SWING_STATE = 0.03;      // standard deviation of the statewide swing (3 points)
+const SWING_REGION = 0.02;     // regional swing (2 points)
+const SWING_TILE = 0.015;      // local noise per tile (1.5 points)
+const REGION_COUNT = 4;
+const PASS_PROBABILITY = 0.7;  // required chance of reaching the seat target
+const DISTRICT_SIGMA = 0.035;  // typical spread of a district's result, used for quick estimates
+const REALISTIC_SHARE_RANGE = [0.45, 0.49];
+
+function gaussian(rand) {
+  let u = 0;
+  while (u === 0) u = rand();
+  return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * rand());
+}
+
+// Standard normal cumulative distribution (Abramowitz–Stegun approximation).
+function normCdf(x) {
+  const t = 1 / (1 + 0.2316419 * Math.abs(x));
+  const d = 0.3989423 * Math.exp((-x * x) / 2);
+  const p = d * t * (0.3193815 + t * (-0.3565638 + t * (1.781478 + t * (-1.821256 + t * 1.330274))));
+  return x > 0 ? 1 - p : p;
+}
+
+// Precompute the swings for every simulated election. Every plan on this map
+// is judged against the same elections, so odds don't jitter while drawing.
+function buildUncertainty(tiles, seed) {
+  const rand = mulberry32(seed);
+  const T = tiles.length;
+  const step = SQRT3 * HEX;
+  const regions = range(REGION_COUNT).map(() => tiles[Math.floor(rand() * T)]);
+  const weights = tiles.map((t) => {
+    const w = regions.map((c) => Math.exp(-((t.x - c.x) ** 2 + (t.y - c.y) ** 2) / (2 * (step * 2.5) ** 2)));
+    const norm = Math.sqrt(w.reduce((s, x) => s + x * x, 0)) || 1;
+    return w.map((x) => x / norm);
+  });
+  const shift = new Float32Array(SIMULATIONS * T);
+  const state = new Float32Array(SIMULATIONS);
+  for (let s = 0; s < SIMULATIONS; s++) {
+    const z0 = gaussian(rand) * SWING_STATE;
+    const zr = regions.map(() => gaussian(rand) * SWING_REGION);
+    state[s] = z0;
+    for (let i = 0; i < T; i++) {
+      let reg = 0;
+      for (let r = 0; r < REGION_COUNT; r++) reg += weights[i][r] * zr[r];
+      shift[s * T + i] = z0 + reg + gaussian(rand) * SWING_TILE;
+    }
+  }
+  return { sims: SIMULATIONS, shift, state };
+}
+
+const clampShare = (v) => (v < 0.02 ? 0.02 : v > 0.98 ? 0.98 : v);
+
+// Run every simulated election for a (possibly partial) plan.
+function simulatePlan(map, assign) {
+  const { tiles, unc } = map;
+  const n = map.cfg.districts;
+  const T = tiles.length;
+  const pop = new Float64Array(n);
+  for (const t of tiles) if (assign[t.id] >= 0) pop[assign[t.id]] += t.pop;
+  const wins = new Float64Array(n);
+  const hist = new Array(n + 1).fill(0);
+  const votes = new Float64Array(n);
+  for (let s = 0; s < unc.sims; s++) {
+    votes.fill(0);
+    const off = s * T;
+    for (let i = 0; i < T; i++) {
+      const d = assign[i];
+      if (d < 0) continue;
+      votes[d] += tiles[i].pop * clampShare(tiles[i].lean / 100 + unc.shift[off + i]);
+    }
+    let seats = 0;
+    for (let d = 0; d < n; d++) {
+      if (pop[d] > 0 && votes[d] / pop[d] > 0.5) {
+        wins[d]++;
+        seats++;
+      }
+    }
+    hist[seats]++;
+  }
+  const winProb = Array.from(wins, (w) => w / unc.sims);
+  const seatProb = hist.map((h) => h / unc.sims);
+  const pTarget = seatProb.slice(map.target).reduce((a, b) => a + b, 0);
+  const expectedSeats = seatProb.reduce((s, p, k) => s + p * k, 0);
+  return { winProb, seatProb, pTarget, expectedSeats };
+}
+
+// District vote shares in one particular simulated election.
+function simulateOne(map, assign, s) {
+  const { tiles, unc } = map;
+  const n = map.cfg.districts;
+  const T = tiles.length;
+  const pop = new Float64Array(n);
+  const votes = new Float64Array(n);
+  for (let i = 0; i < T; i++) {
+    const d = assign[i];
+    if (d < 0) continue;
+    pop[d] += tiles[i].pop;
+    votes[d] += tiles[i].pop * clampShare(tiles[i].lean / 100 + unc.shift[s * T + i]);
+  }
+  return { shares: Array.from(votes, (v, d) => (pop[d] ? v / pop[d] : 0)), swing: unc.state[s] };
+}
+
+// The k-th highest district vote share. Because swings are mostly shared,
+// the chance of winning k seats depends mainly on this one number.
+function kthShare(shares, k) {
+  return Array.from(shares).sort((a, b) => b - a)[k - 1];
+}
+
+const approxChance = (kth) => normCdf((kth - 0.5) / DISTRICT_SIGMA);
+
+// Simulated annealing that maximises the k-th highest district share (with a
+// small bonus for the other top districts), keeping districts connected and
+// recording only legal plans.
+function annealRobust(tiles, start, n, ideal, rand, o) {
+  const T = tiles.length;
+  const k = o.k;
+  const assign = start.slice();
+  const pop = new Array(n).fill(0);
+  const votes = new Array(n).fill(0);
+  const size = new Array(n).fill(0);
+  for (const t of tiles) {
+    const d = assign[t.id];
+    pop[d] += t.pop;
+    votes[d] += (t.pop * t.lean) / 100;
+    size[d]++;
+  }
+  const tolAbs = ideal * o.tol;
+  const excess = (p) => Math.max(0, Math.abs(p - ideal) - tolAbs) / ideal;
+  const shares = pop.map((p, d) => votes[d] / p);
+  const score = () => {
+    const sorted = shares.slice().sort((a, b) => b - a);
+    let top = 0;
+    for (let i = 0; i < k; i++) top += sorted[i];
+    return 100 * sorted[k - 1] + 10 * top;
+  };
+  let penalty = pop.reduce((s, p) => s + excess(p), 0);
+  let energy = score() - o.penW * penalty;
+  let bad = pop.filter((p) => excess(p) > 0).length;
+
+  let best = null;
+  let bestKth = -Infinity;
+  const record = () => {
+    const kth = kthShare(shares, k);
+    if (kth > bestKth) {
+      bestKth = kth;
+      best = assign.slice();
+    }
+  };
+  if (bad === 0) record();
+
+  const mark = new Int32Array(T);
+  const stack = new Int32Array(T);
+  let stamp = 0;
+  for (let it = 0; it < o.iters; it++) {
+    const temp = o.t0 * Math.pow(o.t1 / o.t0, it / o.iters);
+    const i = Math.floor(rand() * T);
+    const j = tiles[i].nbrs[Math.floor(rand() * 6)];
+    if (j < 0) continue;
+    const a = assign[i];
+    const b = assign[j];
+    if (a === b || size[a] === 1) continue;
+
+    const p = tiles[i].pop;
+    const v = (p * tiles[i].lean) / 100;
+    const oldA = shares[a];
+    const oldB = shares[b];
+    shares[a] = (votes[a] - v) / (pop[a] - p);
+    shares[b] = (votes[b] + v) / (pop[b] + p);
+    const newPenalty = penalty - excess(pop[a]) - excess(pop[b]) + excess(pop[a] - p) + excess(pop[b] + p);
+    const newEnergy = score() - o.penW * newPenalty;
+    const delta = newEnergy - energy;
+    const revert = () => { shares[a] = oldA; shares[b] = oldB; };
+    if (delta < 0 && rand() >= Math.exp(delta / temp)) { revert(); continue; }
+
+    stamp++;
+    let first = -1;
+    for (const q of tiles[i].nbrs) if (q >= 0 && assign[q] === a) { first = q; break; }
+    if (first < 0) { revert(); continue; }
+    mark[i] = stamp;
+    mark[first] = stamp;
+    let sp = 0;
+    let count = 1;
+    stack[sp++] = first;
+    while (sp) {
+      const x = stack[--sp];
+      for (const y of tiles[x].nbrs) {
+        if (y >= 0 && assign[y] === a && mark[y] !== stamp) {
+          mark[y] = stamp;
+          stack[sp++] = y;
+          count++;
+        }
+      }
+    }
+    if (count !== size[a] - 1) { revert(); continue; }
+
+    const wasBad = (excess(pop[a]) > 0 ? 1 : 0) + (excess(pop[b]) > 0 ? 1 : 0);
+    assign[i] = b;
+    pop[a] -= p; votes[a] -= v; size[a]--;
+    pop[b] += p; votes[b] += v; size[b]++;
+    bad += (excess(pop[a]) > 0 ? 1 : 0) + (excess(pop[b]) > 0 ? 1 : 0) - wasBad;
+    penalty = newPenalty;
+    energy = newEnergy;
+    if (bad === 0) record();
+  }
+  return best ? { plan: best, kth: bestKth } : null;
+}
+
+function findRobustPlan(tiles, n, ideal, target, starts, rand, tol) {
+  let best = null;
+  for (const plan of starts) {
+    const r = annealRobust(tiles, plan, n, ideal, rand, {
+      k: target, tol, penW: 300, t0: 1.0, t1: 0.02, iters: 30000,
+    });
+    if (r && (!best || r.kth > best.kth)) best = r;
+  }
+  return best;
+}
+
+function planShares(tiles, plan, n) {
+  const pop = new Array(n).fill(0);
+  const votes = new Array(n).fill(0);
+  for (const t of tiles) {
+    pop[plan[t.id]] += t.pop;
+    votes[plan[t.id]] += (t.pop * t.lean) / 100;
+  }
+  return pop.map((p, d) => votes[d] / p);
+}
+
+// Like generateMap, but the target is a PASS_PROBABILITY chance of winning
+// a majority of seats, and difficulty is judged by the same standard.
+function generateRealisticMap(sizeKey, seed) {
+  const cfg = SIZES[sizeKey];
+  const n = cfg.districts;
+  const target = Math.floor(n / 2) + 1;
+  let fallback = null;
+
+  for (let attempt = 0; attempt < MAP_ATTEMPTS; attempt++) {
+    const rand = mulberry32(seed * 7919 + attempt + 500009);
+    const tiles = buildGrid(cfg.cols, cfg.rows);
+    generateGeography(tiles, cfg, rand, REALISTIC_SHARE_RANGE);
+
+    const totalPop = tiles.reduce((s, t) => s + t.pop, 0);
+    const ideal = totalPop / n;
+    const statewideShare = tiles.reduce((s, t) => s + (t.pop * t.lean) / 100, 0) / totalPop;
+    if (statewideShare >= 0.5) continue;
+
+    const samples = sampleLegalPlans(tiles, n, ideal, rand);
+    if (samples.length < ENSEMBLE_SIZE / 2) continue;
+    const scored = samples.map((s) => ({ plan: s.plan, kth: kthShare(planShares(tiles, s.plan, n), target) }));
+    const winFraction = scored.filter((s) => approxChance(s.kth) >= PASS_PROBABILITY).length / scored.length;
+    if (winFraction > 0.25) continue;
+
+    const starts = scored.sort((a, b) => b.kth - a.kth).slice(0, 3).map((s) => s.plan);
+    const best = findRobustPlan(tiles, n, ideal, target, starts, rand, TOLERANCE);
+    if (!best) continue;
+
+    const map = {
+      sizeKey, cfg, seed, tiles, ideal, target, totalPop, statewideShare,
+      tolerance: TOLERANCE, mode: 'percent', lesson: null, realistic: true,
+      unc: buildUncertainty(tiles, seed * 31 + attempt),
+      solution: best.plan, winFraction, sampleCount: samples.length,
+    };
+    const chance = simulatePlan(map, best.plan).pTarget;
+    if (chance < PASS_PROBABILITY + 0.05) continue; // keep some slack so the map is clearly winnable
+    map.solutionChance = chance;
+    if (winFraction <= MAX_WIN_FRACTION) return map;
+    if (!fallback || winFraction < fallback.winFraction) fallback = map;
+  }
+  if (fallback) return fallback;
+  if (seed < 1e9) return generateRealisticMap(sizeKey, seed + 1000003);
+  throw new Error('Could not generate a realistic map for seed ' + seed);
+}
+
 // ---------- Tutorial lessons ----------
 // Hand-picked layouts (found with an offline search using the same solver).
 // Each one is solvable, and only a small share of random legal plans win it.
@@ -514,7 +796,7 @@ const TUTORIAL = [
     cols: 7, rows: 6, districts: 4, target: 3, tolerance: 0.05,
     intro: "This is the full game. Each tile shows its population and the percentage of people who vote for your candidate. A 55% tile still gives 45% of its votes to the opponent. Districts must now be within ±5% of the ideal size.",
     tip: "Tip: combine your strongest tiles with slightly unfavourable ones to push several districts just over 50%. Watch each district's vote share in the list as you draw.",
-    debrief: "You're ready for the real thing. Generated maps are harder: only a few percent of random legal plans win.",
+    debrief: "Mixing strong and weak tiles to push several districts just over 50% is how real maps are drawn. Next: what happens when results aren't certain.",
     pops: [
       1210, 1750, 1750, 2700, 5020, 5820, 6430,
       1230, 2570, 2680, 5820, 8430, 10270, 8160,
@@ -542,6 +824,27 @@ const TUTORIAL = [
   },
 ];
 
+// Lesson 4 reuses lesson 3's map, but elections are uncertain. The lesson 3
+// plan has one district at 50.6% and only a ~55% chance; spreading the
+// margins evenly (about 53% each) reaches ~76%.
+TUTORIAL.push({
+  ...TUTORIAL[2],
+  title: 'Lesson 4 · Wave elections',
+  realistic: true,
+  uncertaintySeed: 11,
+  intro: "Same map as lesson 3, but now election results are uncertain: on election day the whole state can swing a few points, and so can each region. Badges now show each district's chance to win, and you need a 70% chance of winning 3 seats.",
+  tip: "Tip: the lesson 3 plan only wins 3 seats about 55% of the time, because one district sits at 50.6%. Spread your margins evenly so all three of your districts are around 53%, instead of one safe seat and one on a knife-edge.",
+  debrief: "When the whole state swings, narrow seats fall together. Real map-drawers trade some margin for safety, and gerrymanders that cut it too close can collapse in a <strong>wave election</strong>. You're ready for the real game: try Classic or Realistic mode.",
+  solution: [
+    2, 2, 2, 2, 2, 0, 0,
+    2, 2, 3, 2, 0, 0, 1,
+    2, 2, 3, 2, 3, 0, 1,
+    2, 3, 3, 3, 3, 0, 1,
+    2, 2, 2, 2, 3, 3, 1,
+    2, 2, 2, 2, 1, 1, 1,
+  ],
+});
+
 // ---------- Game state ----------
 let game = null;
 const ui = {
@@ -549,6 +852,8 @@ const ui = {
   tool: 0,            // district index, or 'erase'
   view: 'votes',      // tile colour: 'votes', 'districts' or 'results'
   label: 'lean',      // tile numbers on full maps: 'lean' (vote %), 'pop', 'both' or 'none'
+  realistic: false,   // preferred mode for generated maps
+  sim: null,          // simulation results for the current plan (realistic maps only)
   painting: null,
   lastPainted: null,
   revealed: false,
@@ -591,6 +896,7 @@ function isDark(color) {
 const PROGRESS_KEY = 'gerrymander.tutorialProgress'; // number of lessons completed
 const SKIPPED_KEY = 'gerrymander.tutorialSkipped';
 const LABEL_KEY = 'gerrymander.tileLabel';
+const MODE_KEY = 'gerrymander.mode'; // 'classic' or 'realistic'
 
 function storageGet(key) {
   try { return window.localStorage.getItem(key); } catch (e) { return null; }
@@ -622,6 +928,8 @@ function buildLessonMap(index) {
     lesson: index,
     solution: L.solution.slice(),
     winFraction: null,
+    realistic: !!L.realistic,
+    unc: L.realistic ? buildUncertainty(tiles, L.uncertaintySeed) : null,
   };
 }
 
@@ -714,7 +1022,7 @@ function startGame(sizeKey, seed) {
   els.board.classList.add('busy');
   setTimeout(() => {
     try {
-      loadMap(generateMap(sizeKey, seed));
+      loadMap(ui.realistic ? generateRealisticMap(sizeKey, seed) : generateMap(sizeKey, seed));
     } finally {
       els.loading.hidden = true;
       els.board.classList.remove('busy');
@@ -730,12 +1038,13 @@ function loadMap(map) {
   ui.revealed = false;
   try {
     const url = new URL(window.location.href);
-    for (const key of ['size', 'seed', 'tutorial']) url.searchParams.delete(key);
+    for (const key of ['size', 'seed', 'tutorial', 'mode']) url.searchParams.delete(key);
     if (game.lesson != null) {
       url.searchParams.set('tutorial', String(game.lesson + 1));
     } else {
       url.searchParams.set('size', game.sizeKey);
       url.searchParams.set('seed', String(game.seed));
+      if (game.realistic) url.searchParams.set('mode', 'realistic');
     }
     window.history.replaceState(null, '', url);
   } catch (e) { /* URL updates are optional */ }
@@ -747,6 +1056,22 @@ function loadMap(map) {
 
 const RESULT_SPAN = 20; // district results reach full colour at a 20-point lead
 
+// ---------- Realistic-mode display helpers ----------
+const TOSSUP_COLOR = '#a8650a';
+const fmtChance = (p) => (p > 0.995 ? '>99%' : p < 0.005 ? '<1%' : Math.round(p * 100) + '%');
+function chanceColor(p) {
+  if (p >= 0.75) return WIN_COLOR;
+  if (p <= 0.25) return LOSE_COLOR;
+  return TOSSUP_COLOR;
+}
+function chanceWord(p) {
+  if (p >= 0.9) return 'safe for you';
+  if (p >= 0.75) return 'likely yours';
+  if (p > 0.25) return 'toss-up';
+  if (p > 0.1) return 'likely opponent';
+  return 'safe for opponent';
+}
+
 function sizeLegend() {
   if (!sizedTiles()) return '';
   const hex = (r) => `<svg viewBox="-12 -12 24 24" width="18" height="18" aria-hidden="true">
@@ -757,7 +1082,12 @@ function sizeLegend() {
 function renderLegend() {
   const opp = `rgb(${OPPONENT_RGB.join(',')})`;
   const you = `rgb(${PLAYER_RGB.join(',')})`;
-  if (ui.view === 'results') {
+  if (ui.view === 'results' && game.realistic) {
+    els.legend.innerHTML = `
+      <span>Safe for opponent</span>
+      <span class="legend-scale"><span class="legend-bar" aria-hidden="true"></span><span class="legend-mid">toss-up</span></span>
+      <span>Safe for you</span>`;
+  } else if (ui.view === 'results') {
     els.legend.innerHTML = `
       <span>Opponent wins big</span>
       <span class="legend-scale"><span class="legend-bar" aria-hidden="true"></span><span class="legend-mid">close</span></span>
@@ -770,6 +1100,9 @@ function renderLegend() {
       <span class="legend-chip" style="background:${you}" aria-hidden="true"></span><span>✓ Votes for you</span>`;
   }
   els.legend.insertAdjacentHTML('beforeend', sizeLegend());
+  if (game.realistic) {
+    els.legend.insertAdjacentHTML('beforeend', '<span class="legend-note">Badges show each district\'s chance to win</span>');
+  }
 }
 
 // ---------- Board rendering ----------
@@ -822,6 +1155,7 @@ function renderTiles(stats) {
     let fill = null;
     if (ui.view === 'votes') fill = leanColor(t.lean);
     else if (d >= 0 && ui.view === 'districts') fill = DISTRICT_COLORS[d];
+    else if (d >= 0 && ui.sim) fill = leanColor(50 + (ui.sim.winProb[d] - 0.5) * 40, 20);
     else if (d >= 0) fill = leanColor(stats[d].share * 100, RESULT_SPAN);
     const sized = sizedTiles() && fill;
     el.poly.style.fill = fill || 'var(--unassigned)';
@@ -899,9 +1233,11 @@ function renderBadges(stats) {
     const r = 9;
 
     const g = svgEl('g', { class: 'badge' });
-    const pill = svgEl('rect', { y: y - r, height: r * 2, rx: r, fill: s.wins ? WIN_COLOR : LOSE_COLOR });
+    const chance = ui.sim ? ui.sim.winProb[d] : null;
+    const pillColor = chance != null ? chanceColor(chance) : s.wins ? WIN_COLOR : LOSE_COLOR;
+    const pill = svgEl('rect', { y: y - r, height: r * 2, rx: r, fill: pillColor });
     const value = svgEl('text', { class: 'b-val', y: y + 4 });
-    value.textContent = (isLegal(s) ? '' : '⚠ ') + shareShort(s);
+    value.textContent = (isLegal(s) ? '' : '⚠ ') + (chance != null ? fmtChance(chance) : shareShort(s));
     const dot = svgEl('circle', { r, cy: y, fill: DISTRICT_COLORS[d] });
     const num = svgEl('text', { class: 'b-num', y: y + 4 });
     num.textContent = d + 1;
@@ -942,6 +1278,7 @@ function showTooltip(id, e) {
     const s = currentStats()[d];
     result = `<br><span class="tt-result">District: ${shareText(s)}${game.mode === 'percent' ? ' for you' : ''}
       · ${s.wins ? 'you lead' : 'opponent leads'}</span>`;
+    if (ui.sim) result += `<br><span class="tt-result">Win chance: ${fmtChance(ui.sim.winProb[d])} (${chanceWord(ui.sim.winProb[d])})</span>`;
   }
   els.tooltip.innerHTML = `<strong>${title}</strong><br>${body}${result}`;
   els.tooltip.hidden = false;
@@ -963,11 +1300,22 @@ function renderStatus(stats) {
   const seats = stats.filter((s) => s.wins).length;
   const legal = stats.filter(isLegal).length;
   const assigned = ui.assign.filter((d) => d >= 0).length;
-  els.stSeats.innerHTML =
-    `<strong class="${seats >= game.target ? 'ok' : ''}">${seats}</strong> of ${n} <span class="need">need ${game.target}</span>`;
-  els.stLegal.innerHTML = `<strong class="${legal === n ? 'ok' : ''}">${legal}</strong> of ${n}`;
-  els.stTiles.innerHTML =
-    `<strong class="${assigned === game.tiles.length ? 'ok' : ''}">${assigned}</strong> of ${game.tiles.length}`;
+  const item = (label, value) =>
+    `<div class="status-item"><span class="s-label">${label}</span><span class="s-value">${value}</span></div>`;
+  let html = '';
+  if (ui.sim) {
+    const p = ui.sim.pTarget;
+    html += item('Win chance',
+      `<strong class="${p >= PASS_PROBABILITY ? 'ok' : ''}">${fmtChance(p)}</strong> <span class="need">need ${Math.round(PASS_PROBABILITY * 100)}%</span>`);
+    html += item('Expected seats', `<strong>${ui.sim.expectedSeats.toFixed(1)}</strong> of ${n}`);
+  } else {
+    html += item('Seats won',
+      `<strong class="${seats >= game.target ? 'ok' : ''}">${seats}</strong> of ${n} <span class="need">need ${game.target}</span>`);
+  }
+  html += item('Legal districts', `<strong class="${legal === n ? 'ok' : ''}">${legal}</strong> of ${n}`);
+  html += item('Tiles assigned',
+    `<strong class="${assigned === game.tiles.length ? 'ok' : ''}">${assigned}</strong> of ${game.tiles.length}`);
+  els.statusItems.innerHTML = html;
 }
 
 function renderMission(stats) {
@@ -981,6 +1329,9 @@ function renderMission(stats) {
   let intro;
   if (game.mode === 'percent') {
     intro = `Your candidate expects <strong>${fmtPct(game.statewideShare)}</strong> of the statewide vote.`;
+    if (game.realistic) {
+      intro += ` <span class="muted">Results are uncertain: on election day the state can swing a few points either way.</span>`;
+    }
   } else {
     const yes = Math.round(game.statewideShare * game.totalPop);
     intro = `Your candidate has <strong>${fmtInt(yes)} of ${fmtInt(game.totalPop)}</strong> ${unitWord()}
@@ -990,7 +1341,10 @@ function renderMission(stats) {
     [assigned === T, 'Put every tile in a district', `${assigned} / ${T}`],
     [connected === n, `Keep each district in one piece`, `${connected} / ${n}`],
     [sized === n, `Give each district ${popRangeText()}`, `${sized} / ${n}`],
-    [seats >= game.target, `Win at least ${game.target} of ${n} seats`, `${seats} now`],
+    ui.sim
+      ? [ui.sim.pTarget >= PASS_PROBABILITY,
+          `Reach a ${Math.round(PASS_PROBABILITY * 100)}% chance of winning ${game.target}+ of ${n} seats`, `${fmtChance(ui.sim.pTarget)} now`]
+      : [seats >= game.target, `Win at least ${game.target} of ${n} seats`, `${seats} now`],
   ];
   let html = `<h2>Your mission</h2><p>${intro}</p><ul class="checklist">`;
   for (const [done, text, count] of items) {
@@ -1010,6 +1364,9 @@ function renderMission(stats) {
 function difficultyText() {
   const pct = Math.round(game.winFraction * 100);
   const share = pct === 0 ? `none of ${game.sampleCount}` : `only ${pct}%`;
+  if (game.realistic) {
+    return `${share} of randomly drawn legal maps have a ${Math.round(PASS_PROBABILITY * 100)}%+ chance of winning ${game.target}+ seats.`;
+  }
   return `${share} of randomly drawn legal maps win ${game.target}+ seats.`;
 }
 
@@ -1074,7 +1431,7 @@ function renderDistrictList(stats) {
     vMain.className = 'v-main ' + (s.wins ? 'win' : 'lose');
     if (game.mode === 'percent') {
       vMain.textContent = fmtPct(s.share);
-      vSub.textContent = s.wins ? 'you lead' : 'opponent leads';
+      vSub.textContent = ui.sim ? `${fmtChance(ui.sim.winProb[d])} chance` : s.wins ? 'you lead' : 'opponent leads';
     } else {
       vMain.textContent = `${votesFor(s)} for`;
       vSub.textContent = `${votesAgainst(s)} against`;
@@ -1087,6 +1444,12 @@ function renderControls() {
   for (const btn of els.viewButtons) btn.setAttribute('aria-pressed', String(btn.dataset.view === ui.view));
   for (const btn of els.labelButtons) btn.setAttribute('aria-pressed', String(btn.dataset.label === ui.label));
   els.labelToggle.hidden = game.mode !== 'percent';
+  const inLesson = game.lesson != null;
+  for (const btn of els.modeButtons) {
+    btn.setAttribute('aria-pressed', String(btn.dataset.mode === (game.realistic ? 'realistic' : 'classic')));
+    btn.disabled = inLesson;
+    btn.title = inLesson ? 'Each lesson has its own rules' : '';
+  }
   renderLegend();
   els.legend.classList.toggle('hidden', ui.view === 'districts');
 }
@@ -1098,6 +1461,7 @@ function currentStats() {
 function render() {
   if (!game) return;
   const stats = currentStats();
+  ui.sim = game.realistic ? simulatePlan(game, ui.assign) : null;
   renderTiles(stats);
   renderBorders();
   renderBadges(stats);
@@ -1174,6 +1538,15 @@ function bindEvents() {
   for (const btn of els.labelButtons) btn.addEventListener('click', () => setLabel(btn.dataset.label));
   els.submit.addEventListener('click', holdElection);
   els.tutorialBtn.addEventListener('click', () => startLesson(Math.min(lessonsCompleted(), TUTORIAL.length - 1)));
+  for (const btn of els.modeButtons) {
+    btn.addEventListener('click', () => {
+      const realistic = btn.dataset.mode === 'realistic';
+      storageSet(MODE_KEY, realistic ? 'realistic' : 'classic');
+      if (game && game.lesson == null && realistic === !!game.realistic) return;
+      ui.realistic = realistic;
+      startGame(els.size.value, randomSeed());
+    });
+  }
   els.skipTutorial.addEventListener('click', leaveTutorial);
 
   document.addEventListener('keydown', (e) => {
@@ -1238,6 +1611,11 @@ function holdElection() {
     return;
   }
 
+  if (game.realistic) {
+    holdRealisticElection(stats);
+    return;
+  }
+
   const seats = stats.filter((s) => s.wins).length;
   const won = seats >= game.target;
   const rows = stats.map((s, d) => `
@@ -1263,6 +1641,12 @@ function holdElection() {
     </table>
     ${lesson && won ? `<p class="debrief">${lesson.debrief}</p>` : ''}`;
 
+  openDialog(body, electionActions(won));
+}
+
+// Dialog buttons after an election (shared by both modes).
+function electionActions(won) {
+  const lesson = game.lesson != null ? TUTORIAL[game.lesson] : null;
   let actions;
   if (lesson) {
     const index = game.lesson;
@@ -1291,7 +1675,60 @@ function holdElection() {
           { label: 'Keep trying', primary: true },
         ];
   }
-  openDialog(body, actions);
+  return actions;
+}
+
+function holdRealisticElection(stats) {
+  const sim = simulatePlan(game, ui.assign);
+  const won = sim.pTarget >= PASS_PROBABILITY;
+  const n = game.cfg.districts;
+  const need = Math.round(PASS_PROBABILITY * 100);
+
+  // One simulated election night, for drama. It doesn't decide the result.
+  const night = simulateOne(game, ui.assign, Math.floor(Math.random() * game.unc.sims));
+  const nightSeats = night.shares.filter((x) => x > 0.5).length;
+  const swingPts = Math.abs(night.swing * 100).toFixed(1);
+  const swingText = Math.abs(night.swing) < 0.005
+    ? 'barely moved'
+    : `swung ${swingPts} points toward ${night.swing > 0 ? 'your candidate' : 'the opponent'}`;
+
+  const rows = stats.map((s, d) => {
+    const p = sim.winProb[d];
+    const nightWin = night.shares[d] > 0.5;
+    return `
+    <tr>
+      <td><span class="dot" style="background:${DISTRICT_COLORS[d]}"></span>District ${d + 1}</td>
+      <td class="num">${fmtPct(s.share)}</td>
+      <td class="num" style="color:${chanceColor(p)}">${fmtChance(p)}</td>
+      <td class="num">${fmtPct(night.shares[d])}</td>
+      <td class="${nightWin ? 'win' : 'lose'}">${nightWin ? '✓ You' : '✗ Opp.'}</td>
+    </tr>`;
+  }).join('');
+
+  const maxP = Math.max(...sim.seatProb);
+  const bars = sim.seatProb.map((p, k) => `
+    <div class="hist-row">
+      <span class="hist-label">${k} seat${k === 1 ? '' : 's'}</span>
+      <span class="hist-track"><span class="hist-bar ${k >= game.target ? 'enough' : ''}" style="width:${(p / maxP) * 100}%"></span></span>
+      <span class="hist-val">${fmtChance(p)}</span>
+    </div>`).join('');
+
+  const lesson = game.lesson != null ? TUTORIAL[game.lesson] : null;
+  const title = lesson ? (won ? 'Lesson complete!' : 'Too risky') : won ? 'Victory!' : 'Too risky';
+  const body = `
+    <h2>${title}</h2>
+    <p>Across ${game.unc.sims.toLocaleString('en-US')} simulated elections, your map wins ${game.target}+ of ${n} seats
+       <strong>${fmtChance(sim.pTarget)}</strong> of the time (you need ${need}%). Expected seats: ${sim.expectedSeats.toFixed(1)}.</p>
+    <h3 class="dialog-sub">Seats won across all simulations</h3>
+    <div class="histogram">${bars}</div>
+    <h3 class="dialog-sub">One simulated election night</h3>
+    <p class="small">The state ${swingText}. You won <strong>${nightSeats} of ${n}</strong> seats.</p>
+    <table class="results-table">
+      <thead><tr><th>District</th><th class="num">Expected</th><th class="num">Win chance</th><th class="num">That night</th><th>Winner</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+    ${lesson && won ? `<p class="debrief">${lesson.debrief}</p>` : ''}`;
+  openDialog(body, electionActions(won));
 }
 
 function revealSolution() {
@@ -1331,6 +1768,8 @@ function init() {
   els.lessonTip = $('#lesson-tip');
   els.tutorialBtn = $('#tutorial-btn');
   els.skipTutorial = $('#skip-tutorial');
+  els.statusItems = $('#status-items');
+  els.modeButtons = document.querySelectorAll('[data-mode]');
 
   for (const [key, cfg] of Object.entries(SIZES)) {
     const opt = document.createElement('option');
@@ -1343,6 +1782,7 @@ function init() {
   const params = new URLSearchParams(window.location.search);
   const sizeKey = SIZES[params.get('size')] ? params.get('size') : 'medium';
   const seedParam = parseInt(params.get('seed'), 10);
+  ui.realistic = params.has('seed') ? params.get('mode') === 'realistic' : storageGet(MODE_KEY) === 'realistic';
   els.size.value = sizeKey;
   bindEvents();
 
@@ -1363,5 +1803,6 @@ if (typeof document !== 'undefined') {
   document.addEventListener('DOMContentLoaded', init);
 }
 if (typeof module !== 'undefined') {
-  module.exports = { generateMap, computeStats, SIZES, TOLERANCE, buildGrid, sampleLegalPlans, findBestPlan, mulberry32, generateGeography, TUTORIAL };
+  module.exports = { generateMap, computeStats, SIZES, TOLERANCE, buildGrid, sampleLegalPlans, findBestPlan, mulberry32, generateGeography, TUTORIAL,
+    generateRealisticMap, simulatePlan, buildUncertainty, findRobustPlan, kthShare, planShares, PASS_PROBABILITY };
 }

@@ -509,3 +509,28 @@ dialog li { margin-bottom: 0.3rem; }
 .legend-size { display: inline-flex; align-items: center; gap: 0.25rem; margin-left: 0.75rem; }
 .legend-size .lg-rim { fill: var(--muted); opacity: 0.25; }
 .legend-size .lg-core { fill: var(--muted); }
+
+/* ---------- Realistic mode ---------- */
+.status-items { display: flex; flex-wrap: wrap; gap: 0.5rem 1.5rem; }
+.legend-note { margin-left: 0.75rem; font-style: italic; }
+.dialog-sub {
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+  margin: 1rem 0 0.4rem;
+}
+.histogram { display: flex; flex-direction: column; gap: 0.25rem; }
+.hist-row {
+  display: grid;
+  grid-template-columns: 4.5rem minmax(0, 1fr) 3rem;
+  gap: 0.5rem;
+  align-items: center;
+  font-size: 0.88rem;
+  font-variant-numeric: tabular-nums;
+}
+.hist-track { height: 12px; background: var(--unassigned); border-radius: 6px; overflow: hidden; }
+.hist-bar { display: block; height: 100%; background: var(--bad); border-radius: 6px; }
+.hist-bar.enough { background: var(--good); }
+.hist-val { text-align: right; color: var(--muted); }
+.controls .segmented button:disabled { opacity: 0.45; cursor: not-allowed; }

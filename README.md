@@ -19,8 +19,17 @@ New players start with three short lessons (the **Tutorial** button reopens them
 1. **Every voter counts.** Each tile is one voter who votes yes or no. Districts must have exactly 5 voters. This lesson teaches cracking and packing.
 2. **People, not land.** Votes are still yes or no, but tiles hold different numbers of people, and districts must be within ±10% of the ideal population.
 3. **Shades of support.** The full model: each tile has a population and a percentage of people who vote for your candidate, with a ±5% limit.
+4. **Wave elections.** The same map with uncertain results (Realistic mode): you need a 70% chance of winning, so narrow seats are risky.
 
-Lesson maps are hand-picked (found with an offline search that uses the game's solver). Progress is saved in the browser, and a lesson can be linked directly with `?tutorial=1`, `2` or `3`.
+Lesson maps are hand-picked (found with an offline search that uses the game's solver). Progress is saved in the browser, and a lesson can be linked directly with `?tutorial=1` to `4`.
+
+## Realistic mode
+
+Switch **Mode** to **Realistic** for uncertain elections. Each of 1,000 simulated elections shifts every tile's expected vote share by a statewide swing (±3 points), regional swings (±2 points) and local noise (±1.5 points). Because most of the swing is shared, narrow seats tend to fall together.
+
+- Badges, the district list and the Results view show each district's **chance to win**.
+- A map passes when it wins the target number of seats in at least **70%** of simulations. The results show a histogram of seats won and one simulated election night.
+- Realistic maps are generated and checked against this rule: the solver maximises the vote share of the weakest district you need, and few random legal plans reach 70%.
 
 ## How maps are made
 

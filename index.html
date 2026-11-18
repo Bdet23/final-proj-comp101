@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Gerrymander</title>
   <meta name="description" content="Draw district lines on a hex map so your candidate wins the most seats.">
-  <link rel="stylesheet" href="style.css?v=8">
+  <link rel="stylesheet" href="style.css?v=9">
 </head>
 <body>
   <header class="topbar">
@@ -14,6 +14,11 @@
       <span class="subtitle">Draw the lines. Win the seats.</span>
     </div>
     <nav class="controls" aria-label="Game options">
+      <div class="segmented" role="group" aria-label="Game mode">
+        <span class="seg-label">Mode</span>
+        <button type="button" data-mode="classic" title="">Classic</button>
+        <button type="button" data-mode="realistic" title="">Realistic</button>
+      </div>
       <label class="size-label">Map
         <select id="size-select"></select>
       </label>
@@ -36,18 +41,7 @@
       </div>
 
       <div class="statusbar">
-        <div class="status-item">
-          <span class="s-label">Seats won</span>
-          <span class="s-value" id="st-seats"></span>
-        </div>
-        <div class="status-item">
-          <span class="s-label">Legal districts</span>
-          <span class="s-value" id="st-legal"></span>
-        </div>
-        <div class="status-item">
-          <span class="s-label">Tiles assigned</span>
-          <span class="s-value" id="st-tiles"></span>
-        </div>
+        <div id="status-items" class="status-items"></div>
         <button id="submit" type="button" class="primary">Hold election</button>
       </div>
 
@@ -97,6 +91,7 @@
           <li>Each district must be one connected piece and its population must be within the allowed range.</li>
           <li>Your candidate wins a district when more than 50% of its voters support them. The badge on each district shows its result: green means you lead.</li>
           <li>Win at least the target number of districts, even though your candidate has fewer votes statewide.</li>
+          <li><strong>Realistic mode:</strong> each election the state, its regions and each tile can swing a few points. Badges show each district's chance to win, and you need a 70% chance of winning the target number of seats.</li>
           <li>Shortcuts: <kbd>1</kbd>–<kbd>8</kbd> pick a district, <kbd>E</kbd> eraser, <kbd>V</kbd> cycle colours (voters, districts, results), <kbd>L</kbd> cycle tile numbers.</li>
         </ul>
       </details>
@@ -108,6 +103,6 @@
     <div class="dialog-actions" id="result-actions"></div>
   </dialog>
 
-  <script src="game.js?v=8"></script>
+  <script src="game.js?v=9"></script>
 </body>
 </html>
