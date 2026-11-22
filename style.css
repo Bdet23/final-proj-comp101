@@ -671,3 +671,47 @@ dialog { width: min(640px, calc(100vw - 32px)); }
 #gap-slider { width: 140px; accent-color: var(--accent); }
 .votes-cast { color: var(--muted); }
 [data-label][hidden] { display: none; }
+
+/* ---------- Campaign mode ---------- */
+.campaign {
+  margin-bottom: 0.75rem;
+  padding: 0.85rem 1rem;
+  border: 1px solid var(--accent);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--accent) 6%, var(--surface));
+}
+.campaign[hidden] { display: none; }
+.camp-head { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
+.camp-head h2 { font-size: 1.2rem; margin: 0; }
+.camp-score { font-weight: 600; font-variant-numeric: tabular-nums; }
+.camp-lead { font-size: 1.02rem; margin: 0.5rem 0 0.7rem; }
+.timeline { list-style: none; display: grid; grid-template-columns: repeat(10, minmax(0, 1fr)); gap: 4px; padding: 0; margin: 0.6rem 0; }
+.tl-year {
+  display: flex; flex-direction: column; align-items: center; gap: 2px;
+  padding: 0.3rem 0.1rem; border-radius: 6px; border: 1px solid var(--border); background: var(--surface);
+  font-size: 0.8rem; font-variant-numeric: tabular-nums; min-height: 3.4rem;
+}
+.tl-year.election { border-style: dashed; }
+.tl-year.done { opacity: 0.75; }
+.tl-year.current { border: 2px solid var(--accent); font-weight: 700; }
+.tl-mark { font-size: 0.85rem; line-height: 1; min-height: 1em; }
+.tl-result { font-weight: 700; min-height: 1em; }
+.event-card { border: 1px solid var(--border); border-radius: 8px; background: var(--surface); padding: 0.75rem 0.9rem; margin-top: 0.4rem; }
+.event-card h3 { margin: 0.1rem 0 0.35rem; font-size: 1.1rem; }
+.event-card p { margin: 0.3rem 0; }
+.event-year { font-size: 0.8rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--accent); }
+.choices { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.6rem; margin: 0.6rem 0 0.3rem; }
+.choice { display: flex; flex-direction: column; align-items: flex-start; gap: 0.25rem; text-align: left; padding: 0.6rem 0.75rem; }
+.choice:hover { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+.choice-label { font-weight: 650; }
+.choice-detail { font-size: 0.88rem; color: var(--muted); }
+.choice-effect { font-size: 0.85rem; font-variant-numeric: tabular-nums; }
+.camp-log { margin-top: 0.5rem; font-size: 0.9rem; }
+.camp-log summary { cursor: pointer; color: var(--muted); }
+.camp-log ul { margin: 0.4rem 0 0; padding-left: 1.1rem; }
+.tile.event-hex .hex { stroke: var(--text); stroke-width: 2.5; stroke-dasharray: 4 3; }
+.tile.event-hex-strong .hex { stroke-width: 4; stroke-dasharray: none; }
+@media (max-width: 700px) {
+  .choices { grid-template-columns: minmax(0, 1fr); }
+  .timeline { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+}

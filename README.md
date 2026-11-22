@@ -52,6 +52,18 @@ python3 tools/build_states.py counties.json 2020_US_County_Level_Presidential_Re
 node tools/solve_states.js layouts.json states.js
 ```
 
+## Campaign mode
+
+Choose **Mode: Campaign** to play a decade on a Realistic map (generated or a real state):
+
+1. Draw a legal map and press **Start the decade**. The map is then locked until 2030.
+2. Each year from 2021 to 2030 brings an event (housing boom, factory closure, national wave, scandal, voting restrictions, retirement) with two choices. Each choice shows how it would move your districts' expected vote share.
+3. After the choice the year passes: population grows or shrinks, and each hex drifts toward one party, following trends that differ for cities, suburbs and rural areas and by region; turnout drifts too.
+4. Every even year holds a House election, decided by one simulated election.
+5. After 2030 the decade summary shows seats won per election. Your score is the total seats won.
+
+The **Change** colour view shows how far each hex has moved since the map was drawn.
+
 ## How maps are made
 
 1. **Voter geography first.** Dense cities, suburbs, countryside, a corridor (river or highway) and scattered pockets set each tile's population and vote share. No district plan is involved, so the map does not reveal an answer.

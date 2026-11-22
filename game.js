@@ -1010,6 +1010,7 @@ const ui = {
   view: 'votes',      // tile colour: 'votes', 'districts' or 'results'
   label: 'lean',      // tile numbers on full maps: 'lean' (vote %), 'pop', 'both' or 'none'
   realistic: false,   // preferred mode for generated maps
+  campaign: false,    // Campaign mode (a decade of events on a Realistic map)
   sim: null,          // simulation results for the current plan (realistic maps only)
   cushions: null,     // swing each district can absorb (realistic maps only)
   swing: 0,           // stress-test swing toward your candidate, as a fraction (0.02 = 2 points)
@@ -1253,6 +1254,9 @@ function loadMap(map) {
   ui.revealed = false;
   ui.swing = 0;
   ui.turnoutGap = 0;
+  game.campaignMode = ui.campaign && !!game.realistic && game.lesson == null;
+  game.campaign = null;
+  if (ui.view === 'change') ui.view = 'votes';
   if (!game.realistic && ui.view === 'regions') ui.view = 'votes';
   if (!game.turnout && ui.view === 'turnout') ui.view = 'votes';
   try {
@@ -1263,11 +1267,11 @@ function loadMap(map) {
     } else if (game.state) {
       url.searchParams.set('state', game.state.code);
       url.searchParams.set('party', game.party);
-      if (game.realistic) url.searchParams.set('mode', 'realistic');
+      if (game.realistic) url.searchParams.set('mode', game.campaignMode ? 'campaign' : 'realistic');
     } else {
       url.searchParams.set('size', game.sizeKey);
       url.searchParams.set('seed', String(game.seed));
-      if (game.realistic) url.searchParams.set('mode', 'realistic');
+      if (game.realistic) url.searchParams.set('mode', game.campaignMode ? 'campaign' : 'realistic');
     }
     window.history.replaceState(null, '', url);
   } catch (e) { /* URL updates are optional */ }
@@ -1349,6 +1353,12 @@ function renderLegend() {
   const opp = `rgb(${oppRGB().join(',')})`;
   const you = `rgb(${youRGB().join(',')})`;
   const bar = `<span class="legend-bar" aria-hidden="true" style="background:linear-gradient(90deg, ${opp}, rgb(${NEUTRAL_RGB.join(',')}), ${you})"></span>`;
+  if (ui.view === 'change') {
+    els.legend.innerHTML = `<span>Moved toward ${oppName().toLowerCase() === 'opponent' ? 'opponent' : 'the ' + oppName()}</span>${bar}
+      <span>Moved toward ${game.party ? 'the ' + youName() : 'you'}</span>
+      <span class="legend-note">Change in vote share since ${CAMPAIGN_FIRST_YEAR - 1}, in points (full colour at 5).</span>`;
+    return;
+  }
   if (ui.view === 'turnout') {
     els.legend.innerHTML = `<span>Turnout ${Math.round(TURNOUT_LO * 100)}%</span>
       <span class="legend-bar" aria-hidden="true" style="background:linear-gradient(90deg, ${turnoutColor(TURNOUT_LO)}, ${turnoutColor(TURNOUT_HI)})"></span>
@@ -1422,7 +1432,7 @@ function buildBoard() {
 
 // Inner hex size: area is proportional to population (largest tile = full size).
 function popScale(t) {
-  return Math.max(MIN_TILE_SCALE, Math.sqrt(t.pop / game.maxPop)) * 0.94;
+  return Math.min(1, Math.max(MIN_TILE_SCALE, Math.sqrt(t.pop / game.maxPop))) * 0.94;
 }
 
 // Population sizing applies wherever tiles have different populations,
@@ -1431,6 +1441,10 @@ const sizedTiles = () => SIZE_TILES_BY_POPULATION && game.mode !== 'voters' && u
 
 function tileText(t) {
   if (ui.label === 'none' && game.mode === 'percent') return ['', ''];
+  if (ui.view === 'change' && ui.label !== 'none') {
+    const dlt = leanChange(t);
+    return [`${dlt >= 0 ? '+' : '−'}${Math.abs(dlt).toFixed(1)}`, ''];
+  }
   if (game.turnout && (ui.label === 'turnout' || (ui.view === 'turnout' && ui.label === 'lean'))) {
     return [Math.round(t.turnout * 100) + '%', ui.view === 'turnout' ? '' : 'turnout'];
   }
@@ -1448,12 +1462,13 @@ function renderTiles(stats) {
     let fill = null;
     if (ui.view === 'votes') fill = leanColor(shownLean(t));
     else if (ui.view === 'turnout') fill = turnoutColor(t.turnout);
+    else if (ui.view === 'change') fill = leanColor(50 + leanChange(t), 5);
     else if (ui.view === 'regions') fill = regionColor(t.id);
     else if (d >= 0 && ui.view === 'districts') fill = DISTRICT_COLORS[d];
     else if (d >= 0 && stressTesting()) fill = leanColor(ui.scenario[d] * 100, RESULT_SPAN);
     else if (d >= 0 && ui.sim) fill = leanColor(50 + (ui.sim.winProb[d] - 0.5) * 40, 20);
     else if (d >= 0) fill = leanColor(stats[d].share * 100, RESULT_SPAN);
-    const sized = sizedTiles() && ui.view !== 'regions' && ui.view !== 'turnout' && fill;
+    const sized = sizedTiles() && !['regions', 'turnout', 'change'].includes(ui.view) && fill;
     el.poly.style.fill = fill || 'var(--unassigned)';
     el.poly.style.fillOpacity = sized ? '0.25' : '';
     el.inner.style.display = sized ? '' : 'none';
@@ -1588,6 +1603,12 @@ function showTooltip(id, e) {
   } else body = `Population ${fmtInt(t.pop)}<br>You ${t.lean}% · Opponent ${100 - t.lean}%`;
   if (game.turnout && game.mode === 'percent') {
     body += `<br>Turnout ${Math.round(t.turnout * 100)}% · ${fmtInt(votersOf(t))} votes`;
+  }
+  if (game.campaign) {
+    const b = game.campaign.base[t.id];
+    const dl = t.lean - b.lean;
+    const dp = t.pop / b.pop - 1;
+    body += `<br>Since ${CAMPAIGN_FIRST_YEAR - 1}: ${dl >= 0 ? '+' : '−'}${Math.abs(dl).toFixed(1)} pts for you, population ${dp >= 0 ? '+' : '−'}${Math.abs(dp * 100).toFixed(1)}%`;
   }
   const title = d >= 0
     ? `<span class="tt-dot" style="background:${DISTRICT_COLORS[d]}"></span>District ${d + 1}`
@@ -1850,6 +1871,7 @@ function renderControls() {
     btn.setAttribute('aria-pressed', String(btn.dataset.view === ui.view));
     if (btn.dataset.view === 'regions') btn.hidden = !game.realistic;
     if (btn.dataset.view === 'turnout') btn.hidden = !game.turnout;
+    if (btn.dataset.view === 'change') btn.hidden = !game.campaign;
   }
   els.uncertaintyBar.hidden = !game.realistic;
   els.swingSlider.value = String(Math.round(ui.swing * 1000) / 10);
@@ -1866,7 +1888,7 @@ function renderControls() {
   for (const btn of els.partyButtons) btn.setAttribute('aria-pressed', String(btn.dataset.party === game.party));
   const inLesson = game.lesson != null;
   for (const btn of els.modeButtons) {
-    btn.setAttribute('aria-pressed', String(btn.dataset.mode === (game.realistic ? 'realistic' : 'classic')));
+    btn.setAttribute('aria-pressed', String(btn.dataset.mode === (game.campaignMode ? 'campaign' : game.realistic ? 'realistic' : 'classic')));
     btn.disabled = inLesson;
     btn.title = inLesson ? 'Each lesson has its own rules' : '';
   }
@@ -1891,6 +1913,12 @@ function render() {
   renderBadges(stats);
   renderStatus(stats);
   renderMission(stats);
+  if (typeof renderCampaign === 'function') renderCampaign();
+  els.goal.hidden = !!game.campaign;
+  els.submit.textContent = game.campaignMode ? 'Start the decade' : 'Hold election';
+  els.submit.hidden = !!game.campaign;
+  els.reset.disabled = !!game.campaign;
+  els.eraser.disabled = !!game.campaign;
   renderDistrictList(stats);
   renderControls();
 }
@@ -1932,6 +1960,7 @@ function bindEvents() {
   els.board.addEventListener('pointerdown', (e) => {
     const id = tileAt(e);
     if (!game || id == null || (e.button !== undefined && e.button !== 0)) return;
+    if (game.campaign) return; // the map is locked during a campaign decade
     e.preventDefault();
     ui.painting = ui.tool === 'erase' || ui.assign[id] === ui.tool ? 'erase' : 'paint';
     ui.lastPainted = null;
@@ -1951,7 +1980,7 @@ function bindEvents() {
 
   els.eraser.addEventListener('click', () => setTool('erase'));
   els.reset.addEventListener('click', () => {
-    if (!game) return;
+    if (!game || game.campaign) return;
     if (ui.assign.some((d) => d >= 0) && !window.confirm('Clear all districts on this map?')) return;
     ui.assign.fill(-1);
     render();
@@ -1981,9 +2010,24 @@ function bindEvents() {
   }
   for (const btn of els.modeButtons) {
     btn.addEventListener('click', () => {
-      const realistic = btn.dataset.mode === 'realistic';
-      storageSet(MODE_KEY, realistic ? 'realistic' : 'classic');
-      if (game && game.lesson == null && realistic === !!game.realistic) return;
+      const mode = btn.dataset.mode;
+      const realistic = mode !== 'classic';
+      storageSet(MODE_KEY, mode);
+      ui.campaign = mode === 'campaign';
+      if (game && game.lesson == null && realistic === !!game.realistic) {
+        // Same map: switching between Realistic and Campaign before a decade starts keeps it.
+        if (!game.campaign || !ui.campaign) {
+          if (game.campaign && !ui.campaign) { startGame(els.size.value, randomSeed()); return; }
+          game.campaignMode = ui.campaign;
+          render();
+          try {
+            const url = new URL(window.location.href);
+            url.searchParams.set('mode', ui.campaign ? 'campaign' : 'realistic');
+            window.history.replaceState(null, '', url);
+          } catch (err) { /* optional */ }
+        }
+        return;
+      }
       ui.realistic = realistic;
       startGame(els.size.value, randomSeed());
     });
@@ -2001,6 +2045,7 @@ function bindEvents() {
       const order = ['votes', 'districts', 'results'];
       if (game.realistic) order.push('regions');
       if (game.turnout) order.push('turnout');
+      if (game.campaign) order.push('change');
       setView(order[(order.indexOf(ui.view) + 1) % order.length]);
     }
     else if ((e.key === 'l' || e.key === 'L') && game.mode === 'percent') {
@@ -2146,6 +2191,10 @@ function metricsSection(stats, expected) {
 
 function holdElection() {
   if (!game) return;
+  if (game.campaignMode) {
+    if (!game.campaign) startDecade();
+    return;
+  }
   const stats = currentStats();
   const problems = validatePlan(stats);
   if (problems.length) {
@@ -2360,6 +2409,7 @@ function init() {
   els.skipTutorial = $('#skip-tutorial');
   els.statusItems = $('#status-items');
   els.modeButtons = document.querySelectorAll('[data-mode]');
+  els.campaign = $('#campaign');
   els.partyButtons = document.querySelectorAll('[data-party]');
   els.partyToggle = $('#party-toggle');
   els.uncertaintyBar = $('#uncertainty-bar');
@@ -2398,7 +2448,9 @@ function init() {
   const stateParam = findState(params.get('state')) ? params.get('state') : null;
   const sizeKey = stateParam || (SIZES[params.get('size')] ? params.get('size') : 'medium');
   const seedParam = parseInt(params.get('seed'), 10);
-  ui.realistic = params.has('seed') || stateParam ? params.get('mode') === 'realistic' : storageGet(MODE_KEY) === 'realistic';
+  const savedMode = params.has('seed') || stateParam ? params.get('mode') : storageGet(MODE_KEY);
+  ui.realistic = savedMode === 'realistic' || savedMode === 'campaign';
+  ui.campaign = savedMode === 'campaign';
   if (stateParam && ['dem', 'rep'].includes(params.get('party'))) ui.party = params.get('party');
   els.size.value = sizeKey;
   bindEvents();
