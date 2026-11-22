@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Gerrymander</title>
   <meta name="description" content="Draw district lines on a hex map so your candidate wins the most seats.">
-  <link rel="stylesheet" href="style.css?v=10">
+  <link rel="stylesheet" href="style.css?v=11">
 </head>
 <body>
   <header class="topbar">
@@ -39,6 +39,8 @@
         <p id="lesson-intro"></p>
         <p id="lesson-tip" class="lesson-tip"></p>
       </div>
+
+      <section class="mission" id="goal" aria-label="Your mission"></section>
 
       <div class="statusbar">
         <div id="status-items" class="status-items"></div>
@@ -83,8 +85,6 @@
     </section>
 
     <aside class="sidebar">
-      <div class="card goal" id="goal"></div>
-
       <div class="card">
         <h2>Districts</h2>
         <p class="hint">Pick a district, then click or drag across tiles to paint them. Click a painted tile again to remove it.</p>
@@ -115,6 +115,6 @@
     <div class="dialog-actions" id="result-actions"></div>
   </dialog>
 
-  <script src="game.js?v=10"></script>
+  <script src="game.js?v=11"></script>
 </body>
 </html>

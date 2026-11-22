@@ -607,3 +607,28 @@ dialog li { margin-bottom: 0.3rem; }
 .segmented button:has(+ button[hidden]) { border-radius: 0 8px 8px 0; }
 .region-mark circle { stroke: #ffffff; stroke-width: 2; }
 .region-mark text { font-size: 12px; font-weight: 800; fill: #ffffff; text-anchor: middle; }
+
+/* ---------- Mission panel (above the map) ---------- */
+.mission {
+  margin-bottom: 0.75rem;
+  padding: 0.85rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-2);
+}
+.mission h2 { font-size: 1.25rem; margin-bottom: 0.35rem; }
+.mission > p { margin: 0.3rem 0; font-size: 1.08rem; line-height: 1.5; }
+.mission .checklist {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.5rem 1.5rem;
+  margin: 0.75rem 0 0.4rem;
+}
+.mission .checklist li { font-size: 1.02rem; grid-template-columns: 24px minmax(0, 1fr) auto; }
+.mission .check { width: 24px; height: 24px; font-size: 0.85rem; }
+.mission .c-count { font-size: 0.95rem; }
+.mission .small { margin-top: 0.4rem; }
+@media (max-width: 700px) {
+  .mission .checklist { grid-template-columns: minmax(0, 1fr); }
+}
+.mission > p.small { font-size: 0.9rem; color: var(--muted); }
