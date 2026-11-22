@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Gerrymander</title>
   <meta name="description" content="Draw district lines on a hex map so your candidate wins the most seats.">
-  <link rel="stylesheet" href="style.css?v=12">
+  <link rel="stylesheet" href="style.css?v=13">
 </head>
 <body>
   <header class="topbar">
@@ -18,6 +18,11 @@
         <span class="seg-label">Mode</span>
         <button type="button" data-mode="classic" title="">Classic</button>
         <button type="button" data-mode="realistic" title="">Realistic</button>
+      </div>
+      <div class="segmented" id="party-toggle" role="group" aria-label="Your party" hidden>
+        <span class="seg-label">Play as</span>
+        <button type="button" data-party="dem">Democrats</button>
+        <button type="button" data-party="rep">Republicans</button>
       </div>
       <label class="size-label">Map
         <select id="size-select"></select>
@@ -103,6 +108,7 @@
           <li>Each district must be one connected piece and its population must be within the allowed range.</li>
           <li>Your candidate wins a district when more than 50% of its voters support them. The badge on each district shows its result: green means you lead.</li>
           <li>Win at least the target number of districts, even though your candidate has fewer votes statewide.</li>
+          <li><strong>Real states:</strong> pick a state under "Real states" in the Map menu and choose a party. Each hex is a county, or part of a large county, with its real 2019 population estimate and 2020 presidential vote.</li>
           <li><strong>Realistic mode:</strong> each election the state, its regions and each tile can swing a few points. Badges show each district's chance to win, and you need a 70% chance of winning the target number of seats.</li>
           <li>Shortcuts: <kbd>1</kbd>–<kbd>8</kbd> pick a district, <kbd>E</kbd> eraser, <kbd>V</kbd> cycle colours, <kbd>L</kbd> cycle tile numbers.</li>
         </ul>
@@ -115,6 +121,7 @@
     <div class="dialog-actions" id="result-actions"></div>
   </dialog>
 
-  <script src="game.js?v=12"></script>
+  <script src="states.js?v=13"></script>
+  <script src="game.js?v=13"></script>
 </body>
 </html>

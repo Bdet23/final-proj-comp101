@@ -33,6 +33,9 @@ const NEUTRAL_RGB = [243, 241, 234];
 const DISTRICT_COLORS = [
   '#0e9384', '#d4a106', '#3f8f3a', '#8b5e3c',
   '#5b6878', '#8a9a1c', '#5fbf9f', '#b08d57',
+  // more for real states with up to 17 districts
+  '#2f6f63', '#b8860b', '#6b8e23', '#6e4b2a', '#7a869a',
+  '#a0a035', '#3f9f7f', '#8f7442', '#4d7f4d',
 ];
 
 // Neighbor offsets for an "odd-r" pointy-top hex grid, ordered to match the
@@ -97,6 +100,32 @@ function buildGrid(cols, rows) {
       const c = t.col + dc;
       const r = t.row + dr;
       return c >= 0 && c < cols && r >= 0 && r < rows ? r * cols + c : -1;
+    });
+  }
+  return tiles;
+}
+
+// Irregular board (a real state): only the listed [col, row] cells exist.
+function buildMaskedGrid(cols, rows, cells) {
+  const index = new Map(cells.map(([c, r], i) => [r * cols + c, i]));
+  const tiles = cells.map(([c, r], i) => ({
+    id: i,
+    col: c,
+    row: r,
+    x: PAD + SQRT3 * HEX * (c + 0.5 * (r & 1)) + (SQRT3 * HEX) / 2,
+    y: PAD + HEX + 1.5 * HEX * r,
+    pop: 0,
+    lean: 50,
+    nbrs: [],
+  }));
+  for (const t of tiles) {
+    const dirs = t.row & 1 ? DIRS_ODD : DIRS_EVEN;
+    t.nbrs = dirs.map(([dc, dr]) => {
+      const c = t.col + dc;
+      const r = t.row + dr;
+      if (c < 0 || c >= cols || r < 0 || r >= rows) return -1;
+      const j = index.get(r * cols + c);
+      return j === undefined ? -1 : j;
     });
   }
   return tiles;
@@ -381,25 +410,25 @@ function anneal(tiles, start, n, ideal, rand, o) {
   return best ? { plan: best, seats: bestSeats } : null;
 }
 
-function sampleLegalPlans(tiles, n, ideal, rand, tol = TOLERANCE, count = ENSEMBLE_SIZE) {
+function sampleLegalPlans(tiles, n, ideal, rand, tol = TOLERANCE, count = ENSEMBLE_SIZE, iters = 4000, t0 = 0.05, t1 = 0.002) {
   const samples = [];
   for (let k = 0; k < count * 2 && samples.length < count; k++) {
     const start = growPartition(tiles, n, rand);
     if (!start) continue;
     const r = anneal(tiles, start, n, ideal, rand, {
-      seatW: 0, marginW: 0, penW: 30, t0: 0.05, t1: 0.002, iters: 4000, stopWhenValid: true, tol,
+      seatW: 0, marginW: 0, penW: 30, t0, t1, iters, stopWhenValid: true, tol,
     });
     if (r) samples.push(r);
   }
   return samples;
 }
 
-function findBestPlan(tiles, n, ideal, samples, rand, tol = TOLERANCE) {
+function findBestPlan(tiles, n, ideal, samples, rand, tol = TOLERANCE, iters = 25000) {
   const starts = samples.slice().sort((a, b) => b.seats - a.seats).slice(0, 4);
   let best = null;
   for (const s of starts) {
     const r = anneal(tiles, s.plan, n, ideal, rand, {
-      seatW: 1, marginW: 0.25, penW: 25, t0: 0.6, t1: 0.02, iters: 25000, stopWhenValid: false, tol,
+      seatW: 1, marginW: 0.25, penW: 25, t0: 0.6, t1: 0.02, iters, stopWhenValid: false, tol,
     });
     if (r && (!best || r.seats > best.seats)) best = r;
   }
@@ -710,11 +739,11 @@ function annealRobust(tiles, start, n, ideal, rand, o) {
   return best ? { plan: best, kth: bestKth } : null;
 }
 
-function findRobustPlan(tiles, n, ideal, target, starts, rand, tol) {
+function findRobustPlan(tiles, n, ideal, target, starts, rand, tol, iters = 30000) {
   let best = null;
   for (const plan of starts) {
     const r = annealRobust(tiles, plan, n, ideal, rand, {
-      k: target, tol, penW: 300, t0: 1.0, t1: 0.02, iters: 30000,
+      k: target, tol, penW: 300, t0: 1.0, t1: 0.02, iters,
     });
     if (r && (!best || r.kth > best.kth)) best = r;
   }
@@ -927,9 +956,17 @@ function svgEl(tag, attrs = {}) {
 }
 
 // span: how many points from 50% reach full colour.
+// On real-state maps the colours follow the parties (Democrats blue,
+// Republicans red); elsewhere you are blue and the opponent red.
+const youRGB = () => (game && game.party === 'rep' ? OPPONENT_RGB : PLAYER_RGB);
+const oppRGB = () => (game && game.party === 'rep' ? PLAYER_RGB : OPPONENT_RGB);
+const PARTY_NAMES = { dem: 'Democrats', rep: 'Republicans' };
+const youName = () => (game && game.party ? PARTY_NAMES[game.party] : 'Your candidate');
+const oppName = () => (game && game.party ? PARTY_NAMES[game.party === 'dem' ? 'rep' : 'dem'] : 'Opponent');
+
 function leanColor(pct, span = 30) {
   const t = Math.max(-1, Math.min(1, (pct - 50) / span));
-  const target = t >= 0 ? PLAYER_RGB : OPPONENT_RGB;
+  const target = t >= 0 ? youRGB() : oppRGB();
   const a = Math.abs(t);
   const rgb = NEUTRAL_RGB.map((v, i) => Math.round(v + (target[i] - v) * a));
   return `rgb(${rgb.join(',')})`;
@@ -1070,7 +1107,51 @@ function randomSeed() {
   return Math.floor(Math.random() * 1000000);
 }
 
+// ---------- Real states ----------
+const REAL_STATES = typeof STATE_DATA !== 'undefined' ? STATE_DATA : [];
+const PARTY_KEY = 'gerrymander.party';
+const findState = (code) => REAL_STATES.find((s) => s.code === code);
+
+function buildStateMap(code, party, realistic) {
+  const S = findState(code);
+  const P = S.parties[party];
+  const tiles = buildMaskedGrid(S.cols, S.rows, S.cells);
+  tiles.forEach((t, i) => {
+    const [, , pop, dem, county] = S.cells[i];
+    t.pop = pop;
+    t.lean = party === 'dem' ? dem : Math.round((100 - dem) * 10) / 10;
+    t.county = S.counties[county];
+  });
+  const totalPop = tiles.reduce((a, t) => a + t.pop, 0);
+  return {
+    sizeKey: code,
+    seed: null,
+    state: S,
+    party,
+    cfg: { cols: S.cols, rows: S.rows, districts: S.seats },
+    tiles,
+    ideal: totalPop / S.seats,
+    target: realistic ? P.realisticTarget : P.target,
+    totalPop,
+    // The real 2020 two-party vote share, so results match the published figure.
+    statewideShare: (party === 'dem' ? S.demShare : 100 - S.demShare) / 100,
+    actualShare: (party === 'dem' ? S.demShare : 100 - S.demShare) / 100,
+    tolerance: TOLERANCE,
+    mode: 'percent',
+    lesson: null,
+    realistic,
+    unc: realistic ? buildUncertainty(tiles, P.uncSeed) : null,
+    solution: (realistic ? P.robustSolution : P.solution).slice(),
+    winFraction: realistic ? P.realisticFraction : P.winFraction,
+    sampleCount: P.sampleCount,
+  };
+}
+
 function startGame(sizeKey, seed) {
+  if (findState(sizeKey)) {
+    loadMap(buildStateMap(sizeKey, ui.party, ui.realistic));
+    return;
+  }
   // Generation can take up to a second, so show a message and let the page paint first.
   els.loading.hidden = false;
   els.board.classList.add('busy');
@@ -1094,9 +1175,13 @@ function loadMap(map) {
   if (!game.realistic && ui.view === 'regions') ui.view = 'votes';
   try {
     const url = new URL(window.location.href);
-    for (const key of ['size', 'seed', 'tutorial', 'mode']) url.searchParams.delete(key);
+    for (const key of ['size', 'seed', 'tutorial', 'mode', 'state', 'party']) url.searchParams.delete(key);
     if (game.lesson != null) {
       url.searchParams.set('tutorial', String(game.lesson + 1));
+    } else if (game.state) {
+      url.searchParams.set('state', game.state.code);
+      url.searchParams.set('party', game.party);
+      if (game.realistic) url.searchParams.set('mode', 'realistic');
     } else {
       url.searchParams.set('size', game.sizeKey);
       url.searchParams.set('seed', String(game.seed));
@@ -1158,8 +1243,9 @@ function sizeLegend() {
 }
 
 function renderLegend() {
-  const opp = `rgb(${OPPONENT_RGB.join(',')})`;
-  const you = `rgb(${PLAYER_RGB.join(',')})`;
+  const opp = `rgb(${oppRGB().join(',')})`;
+  const you = `rgb(${youRGB().join(',')})`;
+  const bar = `<span class="legend-bar" aria-hidden="true" style="background:linear-gradient(90deg, ${opp}, rgb(${NEUTRAL_RGB.join(',')}), ${you})"></span>`;
   if (ui.view === 'regions') {
     const chips = REGION_RGB.map((c, r) =>
       `<span class="legend-chip" style="background:rgb(${c.join(',')})" aria-hidden="true"></span><span>${'ABCD'[r]}</span>`).join('');
@@ -1169,20 +1255,20 @@ function renderLegend() {
   if (ui.view === 'results' && stressTesting()) {
     els.legend.innerHTML = `
       <span>Opponent wins big</span>
-      <span class="legend-scale"><span class="legend-bar" aria-hidden="true"></span><span class="legend-mid">close</span></span>
+      <span class="legend-scale">${bar}<span class="legend-mid">close</span></span>
       <span>You win big</span><span class="legend-note">at a ${fmtSwing(ui.swing)} point swing</span>`;
   } else if (ui.view === 'results' && game.realistic) {
     els.legend.innerHTML = `
       <span>Safe for opponent</span>
-      <span class="legend-scale"><span class="legend-bar" aria-hidden="true"></span><span class="legend-mid">toss-up</span></span>
+      <span class="legend-scale">${bar}<span class="legend-mid">toss-up</span></span>
       <span>Safe for you</span>`;
   } else if (ui.view === 'results') {
     els.legend.innerHTML = `
       <span>Opponent wins big</span>
-      <span class="legend-scale"><span class="legend-bar" aria-hidden="true"></span><span class="legend-mid">close</span></span>
+      <span class="legend-scale">${bar}<span class="legend-mid">close</span></span>
       <span>You win big</span>`;
   } else if (game.mode === 'percent') {
-    els.legend.innerHTML = `<span>Opponent</span><span class="legend-bar" aria-hidden="true"></span><span>Your candidate</span>`;
+    els.legend.innerHTML = `<span>${oppName()}</span>${bar}<span>${youName()}${game.party ? ' (you)' : ''}</span>`;
   } else {
     els.legend.innerHTML = `
       <span class="legend-chip" style="background:${opp}" aria-hidden="true"></span><span>✗ Votes for opponent</span>
@@ -1378,7 +1464,10 @@ function showTooltip(id, e) {
   let body;
   if (game.mode === 'voters') body = `One voter for ${who}`;
   else if (game.mode === 'binary') body = `${fmtInt(t.pop)} ${t.pop === 1 ? 'person' : 'people'}, all voting for ${who}`;
-  else body = `Population ${fmtInt(t.pop)}<br>You ${t.lean}% · Opponent ${100 - t.lean}%`;
+  else if (t.county) {
+    const part = t.county.hexes > 1 ? ` (1 of ${t.county.hexes} hexes)` : '';
+    body = `${t.county.name}${part}<br>Population ${fmtInt(t.pop)}<br>${youName()} ${t.lean}% · ${oppName()} ${Math.round((100 - t.lean) * 10) / 10}%`;
+  } else body = `Population ${fmtInt(t.pop)}<br>You ${t.lean}% · Opponent ${100 - t.lean}%`;
   const title = d >= 0
     ? `<span class="tt-dot" style="background:${DISTRICT_COLORS[d]}"></span>District ${d + 1}`
     : 'Not in a district';
@@ -1455,7 +1544,15 @@ function renderMission(stats) {
 
   let intro;
   if (game.mode === 'percent') {
-    intro = `Your candidate expects <strong>${fmtPct(game.statewideShare)}</strong> of the statewide vote.`;
+    if (game.state) {
+      const S = game.state;
+      const a = S.actual2022;
+      intro = `<strong>${S.name}</strong>, ${S.seats} House seats. You are drawing for the <strong>${youName()}</strong>,
+        who won <strong>${fmtPct(game.actualShare)}</strong> of the two-party vote here in 2020.
+        <span class="muted">The real delegation elected in 2022: ${a.dem} Democrats, ${a.rep} Republicans.</span>`;
+    } else {
+      intro = `Your candidate expects <strong>${fmtPct(game.statewideShare)}</strong> of the statewide vote.`;
+    }
     if (game.realistic) {
       intro += ` <span class="muted">Results are uncertain: on election day the state can swing a few points either way.</span>`;
     }
@@ -1483,7 +1580,9 @@ function renderMission(stats) {
   }
   html += '</ul>';
   if (game.lesson == null) {
-    html += `<p class="muted small">Difficulty: ${difficultyText()} · Map #${game.seed}</p>`;
+    html += game.state
+      ? `<p class="muted small">Difficulty: ${difficultyText()} · Real data: 2020 presidential results and 2019 Census population estimates by county.</p>`
+      : `<p class="muted small">Difficulty: ${difficultyText()} · Map #${game.seed}</p>`;
   }
   els.goal.innerHTML = html;
 }
@@ -1630,6 +1729,8 @@ function renderControls() {
   els.swingReset.disabled = ui.swing === 0;
   for (const btn of els.labelButtons) btn.setAttribute('aria-pressed', String(btn.dataset.label === ui.label));
   els.labelToggle.hidden = game.mode !== 'percent';
+  els.partyToggle.hidden = !game.state;
+  for (const btn of els.partyButtons) btn.setAttribute('aria-pressed', String(btn.dataset.party === game.party));
   const inLesson = game.lesson != null;
   for (const btn of els.modeButtons) {
     btn.setAttribute('aria-pressed', String(btn.dataset.mode === (game.realistic ? 'realistic' : 'classic')));
@@ -1734,6 +1835,13 @@ function bindEvents() {
   });
   els.swingReset.addEventListener('click', () => { ui.swing = 0; render(); });
   els.uncertaintyInfo.addEventListener('click', showUncertaintyInfo);
+  for (const btn of els.partyButtons) {
+    btn.addEventListener('click', () => {
+      ui.party = btn.dataset.party;
+      storageSet(PARTY_KEY, ui.party);
+      if (game && game.state) startGame(game.state.code);
+    });
+  }
   for (const btn of els.modeButtons) {
     btn.addEventListener('click', () => {
       const realistic = btn.dataset.mode === 'realistic';
@@ -1750,6 +1858,7 @@ function bindEvents() {
     if (e.metaKey || e.ctrlKey || e.altKey) return;
     const num = Number(e.key);
     if (Number.isInteger(num) && num >= 1 && num <= game.cfg.districts) setTool(num - 1);
+    else if (e.key === '0' && game.cfg.districts >= 10) setTool(9);
     else if (e.key === 'e' || e.key === 'E') setTool('erase');
     else if (e.key === 'v' || e.key === 'V') {
       const order = game.realistic ? ['votes', 'districts', 'results', 'regions'] : ['votes', 'districts', 'results'];
@@ -1791,6 +1900,14 @@ function openDialog(bodyHtml, actions) {
     els.dialogActions.append(btn);
   }
   els.dialog.showModal();
+}
+
+function realDelegation() {
+  if (!game.state) return '';
+  const a = game.state.actual2022;
+  const yours = game.party === 'dem' ? a.dem : a.rep;
+  return `<p class="small muted">For comparison, the real ${game.state.name} map elected ${a.dem} Democrats and ${a.rep} Republicans in 2022
+    (${yours} for the ${youName()}).</p>`;
 }
 
 // ---------- Gerrymandering measures ----------
@@ -1924,9 +2041,10 @@ function holdElection() {
   const title = lesson ? (won ? 'Lesson complete!' : 'Not quite') : won ? 'Victory!' : 'Defeat';
   const body = `
     <h2>${title}</h2>
-    <p>Your candidate won <strong>${seats} of ${game.cfg.districts}</strong> seats
+    <p>${game.party ? `The ${youName()}` : 'Your candidate'} won <strong>${seats} of ${game.cfg.districts}</strong> seats
        (${fmtPct(seats / game.cfg.districts, 0)} of seats) with ${fmtPct(game.statewideShare)} of the statewide vote.
        ${won ? '' : `You needed ${game.target}.`}</p>
+    ${realDelegation()}
     <table class="results-table">
       <thead><tr><th>District</th><th class="num">${unitHeader}</th><th class="num">${voteHeader}</th><th class="num" title="Polsby–Popper compactness">Compact.</th><th>Winner</th></tr></thead>
       <tbody>${rows}</tbody>
@@ -2035,6 +2153,7 @@ function holdRealisticElection(stats) {
   const title = lesson ? (won ? 'Lesson complete!' : 'Too risky') : won ? 'Victory!' : 'Too risky';
   const body = `
     <h2>${title}</h2>
+    ${realDelegation()}
     <p>Across ${game.unc.sims.toLocaleString('en-US')} simulated elections, your map wins ${game.target}+ of ${n} seats
        <strong>${fmtChance(sim.pTarget)}</strong> of the time (you need ${need}%). Expected seats: ${sim.expectedSeats.toFixed(1)}.</p>
     <h3 class="dialog-sub">Seats won across all simulations</h3>
@@ -2089,30 +2208,51 @@ function init() {
   els.skipTutorial = $('#skip-tutorial');
   els.statusItems = $('#status-items');
   els.modeButtons = document.querySelectorAll('[data-mode]');
+  els.partyButtons = document.querySelectorAll('[data-party]');
+  els.partyToggle = $('#party-toggle');
   els.uncertaintyBar = $('#uncertainty-bar');
   els.swingSlider = $('#swing-slider');
   els.swingValue = $('#swing-value');
   els.swingReset = $('#swing-reset');
   els.uncertaintyInfo = $('#uncertainty-info');
 
+  const generated = document.createElement('optgroup');
+  generated.label = 'Generated maps';
   for (const [key, cfg] of Object.entries(SIZES)) {
     const opt = document.createElement('option');
     opt.value = key;
     opt.textContent = cfg.label;
-    els.size.append(opt);
+    generated.append(opt);
   }
+  els.size.append(generated);
+  if (REAL_STATES.length) {
+    const real = document.createElement('optgroup');
+    real.label = 'Real states (2020 data)';
+    for (const S of REAL_STATES) {
+      const opt = document.createElement('option');
+      opt.value = S.code;
+      opt.textContent = `${S.name} · ${S.seats} districts`;
+      real.append(opt);
+    }
+    els.size.append(real);
+  }
+  ui.party = storageGet(PARTY_KEY) === 'rep' ? 'rep' : 'dem';
   if (['pop', 'both', 'none'].includes(storageGet(LABEL_KEY))) ui.label = storageGet(LABEL_KEY);
 
   const params = new URLSearchParams(window.location.search);
-  const sizeKey = SIZES[params.get('size')] ? params.get('size') : 'medium';
+  const stateParam = findState(params.get('state')) ? params.get('state') : null;
+  const sizeKey = stateParam || (SIZES[params.get('size')] ? params.get('size') : 'medium');
   const seedParam = parseInt(params.get('seed'), 10);
-  ui.realistic = params.has('seed') ? params.get('mode') === 'realistic' : storageGet(MODE_KEY) === 'realistic';
+  ui.realistic = params.has('seed') || stateParam ? params.get('mode') === 'realistic' : storageGet(MODE_KEY) === 'realistic';
+  if (stateParam && ['dem', 'rep'].includes(params.get('party'))) ui.party = params.get('party');
   els.size.value = sizeKey;
   bindEvents();
 
   const lessonParam = parseInt(params.get('tutorial'), 10);
   if (lessonParam >= 1 && lessonParam <= TUTORIAL.length) {
     startLesson(lessonParam - 1);
+  } else if (stateParam) {
+    startGame(stateParam);
   } else if (Number.isFinite(seedParam) && seedParam >= 0) {
     startGame(sizeKey, seedParam);
   } else if (!storageGet(SKIPPED_KEY) && lessonsCompleted() < TUTORIAL.length) {
@@ -2128,5 +2268,6 @@ if (typeof document !== 'undefined') {
 }
 if (typeof module !== 'undefined') {
   module.exports = { generateMap, computeStats, SIZES, TOLERANCE, buildGrid, sampleLegalPlans, findBestPlan, mulberry32, generateGeography, TUTORIAL,
-    generateRealisticMap, simulatePlan, buildUncertainty, findRobustPlan, kthShare, planShares, PASS_PROBABILITY };
+    generateRealisticMap, simulatePlan, buildUncertainty, findRobustPlan, kthShare, planShares, PASS_PROBABILITY,
+    buildMaskedGrid, anneal, growPartition };
 }

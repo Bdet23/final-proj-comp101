@@ -31,6 +31,26 @@ Switch **Mode** to **Realistic** for uncertain elections. Each of 1,000 simulate
 - A map passes when it wins the target number of seats in at least **70%** of simulations. The results show a histogram of seats won and one simulated election night.
 - Realistic maps are generated and checked against this rule: the solver maximises the vote share of the weakest district you need, and few random legal plans reach 70%.
 
+## Real states
+
+Choose a state under **Real states (2020 data)** in the Map menu, then **Play as** Democrats or Republicans. Five states are included, each with its real number of House seats: Wisconsin (8), North Carolina (14), Pennsylvania (17), Michigan (13) and Ohio (15).
+
+- Each hex is a county, or an equal share of a large county, with the county's real population and its 2020 two-party presidential vote share. Hexes are placed near each county's real location, so cities and regions sit where they belong.
+- The seat target for each side is the smallest number of seats (at least a majority) that no more than 10% of random legal plans reach. Realistic mode has its own target, one the game's solver can win with at least a 75% chance.
+- The mission and results show the real delegation elected in 2022 for comparison.
+
+Data sources:
+
+- 2020 presidential results by county: [tonmcg/US_County_Level_Election_Results_08-20](https://github.com/tonmcg/US_County_Level_Election_Results_08-20)
+- 2019 Census Bureau county population estimates, coordinates and land area: [evangambit/JsonOfCounties](https://github.com/evangambit/JsonOfCounties)
+
+To rebuild `states.js` after downloading those two files (`counties.json` and `2020_US_County_Level_Presidential_Results.csv`):
+
+```bash
+python3 tools/build_states.py counties.json 2020_US_County_Level_Presidential_Results.csv layouts.json
+node tools/solve_states.js layouts.json states.js
+```
+
 ## How maps are made
 
 1. **Voter geography first.** Dense cities, suburbs, countryside, a corridor (river or highway) and scattered pockets set each tile's population and vote share. No district plan is involved, so the map does not reveal an answer.
