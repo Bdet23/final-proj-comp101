@@ -632,3 +632,32 @@ dialog li { margin-bottom: 0.3rem; }
   .mission .checklist { grid-template-columns: minmax(0, 1fr); }
 }
 .mission > p.small { font-size: 0.9rem; color: var(--muted); }
+
+/* ---------- Gerrymandering measures (results dialog) ---------- */
+dialog { width: min(640px, calc(100vw - 32px)); }
+.verdict {
+  display: inline-block;
+  margin: 0.2rem 0 0.5rem;
+  padding: 0.25rem 0.7rem;
+  border-radius: 999px;
+  font-weight: 650;
+  font-size: 0.95rem;
+}
+.verdict-strong { background: color-mix(in srgb, var(--bad) 14%, var(--surface)); color: var(--bad); }
+.verdict-moderate { background: color-mix(in srgb, #a8650a 14%, var(--surface)); color: #a8650a; }
+.verdict-fair { background: color-mix(in srgb, var(--good) 14%, var(--surface)); color: var(--good); }
+.metrics-table th[scope="row"] { width: 9.5rem; font-weight: 600; vertical-align: top; }
+.metrics-table td { vertical-align: top; }
+.metrics-table td.num { width: 8rem; }
+.pp-chips { display: flex; flex-wrap: wrap; gap: 0.3rem 0.7rem; margin-top: 0.35rem; }
+.pp-chip { white-space: nowrap; font-variant-numeric: tabular-nums; }
+@media (max-width: 600px) {
+  .metrics-table, .metrics-table tbody, .metrics-table tr, .metrics-table th, .metrics-table td { display: block; width: auto; }
+  .metrics-table tr { border-bottom: 1px solid var(--border); padding: 0.3rem 0; }
+  .metrics-table th, .metrics-table td { border: none; padding: 0.15rem 0; }
+}
+@media (max-width: 600px) {
+  .metrics-table td.num { text-align: left; }
+  .results-table:not(.metrics-table) { display: block; overflow-x: auto; font-size: 0.85rem; }
+  .results-table:not(.metrics-table) th, .results-table:not(.metrics-table) td { padding: 0.35rem 0.3rem; }
+}

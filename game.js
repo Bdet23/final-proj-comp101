@@ -1793,6 +1793,101 @@ function openDialog(bodyHtml, actions) {
   els.dialog.showModal();
 }
 
+// ---------- Gerrymandering measures ----------
+// Polsby–Popper compactness: 4π × area / perimeter². On this hex grid a
+// single hex scores 0.91, a compact blob about 0.7 and a straight line of
+// six hexes about 0.3.
+const HEX_AREA = (3 * SQRT3) / 2; // area of a hex with side 1
+
+function polsbyPopper(d) {
+  let tiles = 0;
+  let edges = 0;
+  for (const t of game.tiles) {
+    if (ui.assign[t.id] !== d) continue;
+    tiles++;
+    for (const j of t.nbrs) if (j < 0 || ui.assign[j] !== d) edges++;
+  }
+  return edges ? (4 * Math.PI * tiles * HEX_AREA) / (edges * edges) : 0;
+}
+
+function fairnessMetrics(stats) {
+  let wastedYou = 0;
+  let wastedOpp = 0;
+  let total = 0;
+  for (const s of stats) {
+    const you = s.votes;
+    const opp = s.pop - s.votes;
+    const half = s.pop / 2;
+    total += s.pop;
+    // Wasted votes: every vote for the loser, and the winner's votes beyond 50%.
+    if (you > half) { wastedYou += you - half; wastedOpp += opp; } else { wastedOpp += opp - half; wastedYou += you; }
+  }
+  const shares = stats.map((s) => s.share).sort((a, b) => a - b);
+  const n = shares.length;
+  const mean = shares.reduce((a, b) => a + b, 0) / n;
+  const median = n % 2 ? shares[(n - 1) / 2] : (shares[n / 2 - 1] + shares[n / 2]) / 2;
+  const seats = stats.filter((s) => s.wins).length;
+  const compact = stats.map((s, d) => polsbyPopper(d));
+  return {
+    efficiencyGap: (wastedOpp - wastedYou) / total, // positive = favours you
+    meanMedian: median - mean,                       // positive = favours you
+    seatShare: seats / n,
+    voteShare: game.statewideShare,
+    compact,
+    avgCompact: compact.reduce((a, b) => a + b, 0) / n,
+  };
+}
+
+const ppWord = (pp) => (pp >= 0.5 ? 'compact' : pp >= 0.3 ? 'irregular' : 'very irregular');
+const favour = (x) => (x > 0 ? 'in your favour' : x < 0 ? "in the opponent's favour" : 'neutral');
+const pts = (x) => Math.abs(x * 100).toFixed(1);
+
+function gerrymanderVerdict(m) {
+  const eg = Math.abs(m.efficiencyGap);
+  const side = m.efficiencyGap >= 0 ? 'your favour' : "the opponent's favour";
+  if (eg >= 0.07) return { level: 'strong', text: `Strong gerrymander in ${side}` };
+  if (eg >= 0.03) return { level: 'moderate', text: `Moderate tilt in ${side}` };
+  return { level: 'fair', text: 'Close to neutral' };
+}
+
+// The "How gerrymandered is this map?" section of the results dialog.
+function metricsSection(stats, expected) {
+  const m = fairnessMetrics(stats);
+  const v = gerrymanderVerdict(m);
+  const worst = m.compact.indexOf(Math.min(...m.compact));
+  const bonus = m.seatShare - m.voteShare;
+  const pp = m.compact.map((c, d) => `
+      <span class="pp-chip"><span class="dot" style="background:${DISTRICT_COLORS[d]}"></span>${d + 1}: ${c.toFixed(2)}</span>`).join('');
+  return `
+    <h3 class="dialog-sub">How gerrymandered is this map?${expected ? ' (expected vote shares)' : ''}</h3>
+    <p class="verdict verdict-${v.level}">${v.text}</p>
+    <table class="results-table metrics-table">
+      <tbody>
+        <tr>
+          <th scope="row">Seats vs votes</th>
+          <td class="num">${fmtPct(m.seatShare, 0)} of seats<br><span class="muted small">from ${fmtPct(m.voteShare)} of votes</span></td>
+          <td class="small">A seat bonus of <strong>${bonus >= 0 ? '+' : '−'}${pts(bonus)} points</strong>. In a neutral map seat share roughly tracks vote share.</td>
+        </tr>
+        <tr>
+          <th scope="row">Efficiency gap</th>
+          <td class="num"><strong>${pts(m.efficiencyGap)}%</strong><br><span class="muted small">${favour(m.efficiencyGap)}</span></td>
+          <td class="small">Difference in "wasted" votes (all votes for a loser, plus a winner's votes beyond 50%) as a share of all votes. Gaps above about 7% are widely treated as a sign of gerrymandering.</td>
+        </tr>
+        <tr>
+          <th scope="row">Mean–median difference</th>
+          <td class="num"><strong>${pts(m.meanMedian)} pts</strong><br><span class="muted small">${favour(m.meanMedian)}</span></td>
+          <td class="small">Your median district's vote share minus your average district's share. When the median sits above the mean, your voters were spread to win more seats; near 0 is symmetric.</td>
+        </tr>
+        <tr>
+          <th scope="row">Polsby–Popper compactness</th>
+          <td class="num"><strong>${m.avgCompact.toFixed(2)}</strong> average<br><span class="muted small">least compact: District ${worst + 1}</span></td>
+          <td class="small">4π × area ÷ perimeter² for each district: 1 is a circle, and odd, stretched shapes score low. On this hex grid a compact blob scores about 0.7 and a line of six hexes about 0.3.
+            <div class="pp-chips">${pp}</div></td>
+        </tr>
+      </tbody>
+    </table>`;
+}
+
 function holdElection() {
   if (!game) return;
   const stats = currentStats();
@@ -1819,6 +1914,7 @@ function holdElection() {
       <td><span class="dot" style="background:${DISTRICT_COLORS[d]}"></span>District ${d + 1}</td>
       <td class="num">${fmtInt(s.pop)}</td>
       <td class="num">${shareText(s)}</td>
+      <td class="num">${polsbyPopper(d).toFixed(2)}</td>
       <td class="${s.wins ? 'win' : 'lose'}">${s.wins ? '✓ You' : '✗ Opponent'}</td>
     </tr>`).join('');
 
@@ -1832,9 +1928,10 @@ function holdElection() {
        (${fmtPct(seats / game.cfg.districts, 0)} of seats) with ${fmtPct(game.statewideShare)} of the statewide vote.
        ${won ? '' : `You needed ${game.target}.`}</p>
     <table class="results-table">
-      <thead><tr><th>District</th><th class="num">${unitHeader}</th><th class="num">${voteHeader}</th><th>Winner</th></tr></thead>
+      <thead><tr><th>District</th><th class="num">${unitHeader}</th><th class="num">${voteHeader}</th><th class="num" title="Polsby–Popper compactness">Compact.</th><th>Winner</th></tr></thead>
       <tbody>${rows}</tbody>
     </table>
+    ${metricsSection(stats, false)}
     ${lesson && won ? `<p class="debrief">${lesson.debrief}</p>` : ''}`;
 
   openDialog(body, electionActions(won));
@@ -1948,6 +2045,7 @@ function holdRealisticElection(stats) {
       <thead><tr><th>District</th><th class="num">Expected</th><th class="num">Win chance</th><th class="num">That night</th><th>Winner</th></tr></thead>
       <tbody>${rows}</tbody>
     </table>
+    ${metricsSection(stats, true)}
     ${lesson && won ? `<p class="debrief">${lesson.debrief}</p>` : ''}`;
   openDialog(body, electionActions(won));
 }
