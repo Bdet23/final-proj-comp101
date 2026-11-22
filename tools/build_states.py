@@ -6,6 +6,9 @@ Inputs (downloaded separately, paths given on the command line):
   pres2020.csv   -- https://github.com/tonmcg/US_County_Level_Election_Results_08-20
                     (2020 presidential results by county)
 
+Each cell is [col, row, population, Democratic two-party %, county index,
+turnout %], where turnout is 2020 votes cast divided by adult residents.
+
 Output: a JSON file of hex layouts that tools/solve_states.js turns into states.js.
 
 Method, per state:
@@ -60,6 +63,9 @@ def build_state(code, counties, votes):
             continue
         v = votes[c['fips']]
         dem, gop = int(v['votes_dem']), int(v['votes_gop'])
+        # Turnout: 2020 votes cast / adults (ages 15-19 counted as 2/5 adults).
+        a = c['age']
+        adults = c['population']['2019'] * (1 - a['0-4'] - a['5-9'] - a['10-14'] - 0.6 * a['15-19'])
         rows.append({
             'name': c['name'].title(),
             'pop': c['population']['2019'],
@@ -68,6 +74,7 @@ def build_state(code, counties, votes):
             'land': c['land_area (km^2)'],
             'dem': dem,
             'gop': gop,
+            'turnout': min(0.95, int(v['total_votes']) / adults),
         })
     total = sum(r['pop'] for r in rows)
     unit = total / seats / UNITS_PER_DISTRICT
@@ -162,6 +169,7 @@ def build_state(code, counties, votes):
             round(r['pop'] / r['k']),
             round(100 * r['dem'] / (r['dem'] + r['gop']), 1),
             ci,
+            round(100 * r['turnout'], 1),
         ])
     dem = sum(r['dem'] for r in rows)
     gop = sum(r['gop'] for r in rows)

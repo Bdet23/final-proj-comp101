@@ -31,9 +31,11 @@ for (const s of layouts) {
     const winFraction = reach(target);
     const randomSeats = samples.map((x) => x.seats).reduce((a, b) => a + b, 0) / samples.length;
 
-    // Realistic mode: the most seats the solver can win with at least a 75% chance.
+    // Realistic mode (with real turnout): the most seats the solver can win with at
+    // least a 75% chance. Classic mode above ignores turnout.
+    tiles.forEach((t, i) => { t.turnout = s.cells[i][5] / 100; });
     const uncSeed = s.code.charCodeAt(0) * 131 + s.code.charCodeAt(1);
-    const unc = g.buildUncertainty(tiles, uncSeed);
+    const unc = g.buildUncertainty(tiles, uncSeed, true);
     let realisticTarget = target;
     let robust = null;
     let robustChance = 0;

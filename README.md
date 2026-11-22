@@ -28,6 +28,7 @@ Lesson maps are hand-picked (found with an offline search that uses the game's s
 Switch **Mode** to **Realistic** for uncertain elections. Each of 1,000 simulated elections shifts every tile's expected vote share by a statewide swing (±3 points), regional swings (±2 points) and local noise (±1.5 points). Because most of the swing is shared, narrow seats tend to fall together.
 
 - Badges, the district list and the Results view show each district's **chance to win**.
+- **Turnout** (generated and real-state maps): each hex has a turnout rate, the share of adults who vote. Real states use 2020 votes cast divided by adult residents; generated maps give crowded tiles slightly lower turnout. Districts must be equal in *people* but are decided by *votes cast*. Each simulated election also varies statewide turnout (about ±5%), adds an enthusiasm gap between the parties (about ±5%) and local turnout noise (about ±4%). On the map the outline of a hex's inner shape is its residents and the filled shape its votes cast; the **Turnout** colour view and label show turnout directly, and the stress test has a turnout-gap slider. Classic mode and the tutorial do not use turnout.
 - A map passes when it wins the target number of seats in at least **70%** of simulations. The results show a histogram of seats won and one simulated election night.
 - Realistic maps are generated and checked against this rule: the solver maximises the vote share of the weakest district you need, and few random legal plans reach 70%.
 

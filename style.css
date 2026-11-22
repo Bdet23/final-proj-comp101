@@ -661,3 +661,13 @@ dialog { width: min(640px, calc(100vw - 32px)); }
   .results-table:not(.metrics-table) { display: block; overflow-x: auto; font-size: 0.85rem; }
   .results-table:not(.metrics-table) th, .results-table:not(.metrics-table) td { padding: 0.35rem 0.3rem; }
 }
+
+/* ---------- Turnout (Realistic mode) ---------- */
+.tile .pop-outline { fill: none; stroke: var(--text); stroke-opacity: 0.45; stroke-width: 1.2; pointer-events: none; }
+.tile.faded .pop-outline { opacity: 0.55; }
+.legend-size .lg-outline { fill: none; stroke: var(--muted); stroke-width: 1.5; }
+.gap-group { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 0.4rem 0.6rem; }
+.gap-group[hidden] { display: none; }
+#gap-slider { width: 140px; accent-color: var(--accent); }
+.votes-cast { color: var(--muted); }
+[data-label][hidden] { display: none; }

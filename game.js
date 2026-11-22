@@ -149,18 +149,25 @@ function isConnected(ids, assign, tiles) {
   return seen.size === ids.length;
 }
 
+// Votes cast in a tile. Only Realistic maps give tiles a turnout rate;
+// everywhere else every resident votes.
+const votersOf = (t) => (t.turnout ? t.pop * t.turnout : t.pop);
+
 function computeStats(tiles, assign, n, ideal, tol = TOLERANCE) {
-  const stats = range(n).map(() => ({ tiles: [], pop: 0, votes: 0 }));
+  // pop = residents (sets district size), voters = votes cast, votes = votes for you
+  const stats = range(n).map(() => ({ tiles: [], pop: 0, voters: 0, votes: 0 }));
   for (const t of tiles) {
     const d = assign[t.id];
     if (d >= 0) {
+      const vt = votersOf(t);
       stats[d].tiles.push(t.id);
       stats[d].pop += t.pop;
-      stats[d].votes += (t.pop * t.lean) / 100;
+      stats[d].voters += vt;
+      stats[d].votes += (vt * t.lean) / 100;
     }
   }
   for (const s of stats) {
-    s.share = s.pop > 0 ? s.votes / s.pop : 0;
+    s.share = s.voters > 0 ? s.votes / s.voters : 0;
     s.dev = (s.pop - ideal) / ideal;
     s.popOk = s.pop > 0 && Math.abs(s.pop - ideal) <= ideal * tol;
     s.connected = isConnected(s.tiles, assign, tiles);
@@ -489,6 +496,10 @@ const REGION_COUNT = 4;
 const PASS_PROBABILITY = 0.7;  // required chance of reaching the seat target
 const DISTRICT_SIGMA = 0.035;  // typical spread of a district's result, used for quick estimates
 const REALISTIC_SHARE_RANGE = [0.45, 0.49];
+// Turnout uncertainty (Realistic maps with turnout): relative changes in votes cast.
+const TURNOUT_STATE = 0.05;  // statewide turnout up or down by about 5% of its usual level
+const TURNOUT_GAP = 0.05;    // enthusiasm gap: one side's voters turn out about 5% more than the other's
+const TURNOUT_TILE = 0.04;   // local turnout noise per tile
 
 function gaussian(rand) {
   let u = 0;
@@ -506,7 +517,7 @@ function normCdf(x) {
 
 // Precompute the swings for every simulated election. Every plan on this map
 // is judged against the same elections, so odds don't jitter while drawing.
-function buildUncertainty(tiles, seed) {
+function buildUncertainty(tiles, seed, withTurnout = false) {
   const rand = mulberry32(seed);
   const T = tiles.length;
   const step = SQRT3 * HEX;
@@ -528,7 +539,34 @@ function buildUncertainty(tiles, seed) {
       shift[s * T + i] = z0 + reg + gaussian(rand) * SWING_TILE;
     }
   }
-  return { sims: SIMULATIONS, shift, state, regions: regions.map((t) => t.id), weights };
+  const unc = { sims: SIMULATIONS, shift, state, regions: regions.map((t) => t.id), weights };
+  if (withTurnout) {
+    // A separate random stream, so preference swings are the same with or without turnout.
+    const rt = mulberry32((seed ^ 0x5bd1e995) >>> 0);
+    unc.tScale = new Float32Array(SIMULATIONS * T); // multiplier on each tile's votes cast
+    unc.tState = new Float32Array(SIMULATIONS);     // statewide turnout change
+    unc.gap = new Float32Array(SIMULATIONS);        // > 0: your side's voters turn out more
+    for (let s = 0; s < SIMULATIONS; s++) {
+      const tau = gaussian(rt) * TURNOUT_STATE;
+      unc.tState[s] = tau;
+      unc.gap[s] = gaussian(rt) * TURNOUT_GAP;
+      for (let i = 0; i < T; i++) unc.tScale[s * T + i] = Math.max(0.3, 1 + tau + gaussian(rt) * TURNOUT_TILE);
+    }
+  }
+  return unc;
+}
+
+// Votes for you and for the opponent in tile i of simulation s.
+function simVotes(tiles, unc, i, s, T) {
+  const t = tiles[i];
+  const share = clampShare(t.lean / 100 + unc.shift[s * T + i]);
+  if (!unc.tScale) {
+    const vt = votersOf(t);
+    return [vt * share, vt * (1 - share)];
+  }
+  const vt = votersOf(t) * unc.tScale[s * T + i];
+  const g = unc.gap[s];
+  return [vt * share * (1 + g / 2), vt * (1 - share) * (1 - g / 2)];
 }
 
 const clampShare = (v) => (v < 0.02 ? 0.02 : v > 0.98 ? 0.98 : v);
@@ -542,21 +580,25 @@ function simulatePlan(map, assign) {
   for (const t of tiles) if (assign[t.id] >= 0) pop[assign[t.id]] += t.pop;
   const wins = new Float64Array(n);
   const hist = new Array(n + 1).fill(0);
-  const votes = new Float64Array(n);
+  const you = new Float64Array(n);
+  const opp = new Float64Array(n);
   const N = unc.sims;
   const shareBuf = new Float32Array(n * N); // every district's share in every simulation
   for (let s = 0; s < unc.sims; s++) {
-    votes.fill(0);
-    const off = s * T;
+    you.fill(0);
+    opp.fill(0);
     for (let i = 0; i < T; i++) {
       const d = assign[i];
       if (d < 0) continue;
-      votes[d] += tiles[i].pop * clampShare(tiles[i].lean / 100 + unc.shift[off + i]);
+      const [a, b] = simVotes(tiles, unc, i, s, T);
+      you[d] += a;
+      opp[d] += b;
     }
     let seats = 0;
     for (let d = 0; d < n; d++) {
-      if (pop[d] > 0) shareBuf[d * N + s] = votes[d] / pop[d];
-      if (pop[d] > 0 && votes[d] / pop[d] > 0.5) {
+      const share = pop[d] > 0 ? you[d] / (you[d] + opp[d]) : 0;
+      if (pop[d] > 0) shareBuf[d * N + s] = share;
+      if (pop[d] > 0 && share > 0.5) {
         wins[d]++;
         seats++;
       }
@@ -577,15 +619,28 @@ function simulatePlan(map, assign) {
   return { winProb, seatProb, pTarget, expectedSeats, ranges };
 }
 
-// District share if every tile moved by the same statewide swing.
-function swungShare(tiles, ids, swing) {
-  let p = 0;
+// Vote share in one tile after a statewide swing and a turnout gap
+// (gap > 0: your side's voters turn out that much more, relatively).
+function tileShareAt(t, swing, gap = 0) {
+  const sh = clampShare(t.lean / 100 + swing);
+  if (!gap) return sh;
+  const a = sh * (1 + gap / 2);
+  return a / (a + (1 - sh) * (1 - gap / 2));
+}
+
+// District share if every tile moved by the same statewide swing (and turnout gap).
+function swungShare(tiles, ids, swing, gap = 0) {
+  let vt = 0;
   let v = 0;
   for (const i of ids) {
-    p += tiles[i].pop;
-    v += tiles[i].pop * clampShare(tiles[i].lean / 100 + swing);
+    const t = tiles[i];
+    const sh = clampShare(t.lean / 100 + swing);
+    const w = votersOf(t);
+    const a = w * sh * (1 + gap / 2);
+    v += a;
+    vt += a + w * (1 - sh) * (1 - gap / 2);
   }
-  return p ? v / p : 0;
+  return vt ? v / vt : 0;
 }
 
 function districtTileIds(map, assign) {
@@ -623,15 +678,21 @@ function simulateOne(map, assign, s) {
   const { tiles, unc } = map;
   const n = map.cfg.districts;
   const T = tiles.length;
-  const pop = new Float64Array(n);
-  const votes = new Float64Array(n);
+  const you = new Float64Array(n);
+  const opp = new Float64Array(n);
   for (let i = 0; i < T; i++) {
     const d = assign[i];
     if (d < 0) continue;
-    pop[d] += tiles[i].pop;
-    votes[d] += tiles[i].pop * clampShare(tiles[i].lean / 100 + unc.shift[s * T + i]);
+    const [a, b] = simVotes(tiles, unc, i, s, T);
+    you[d] += a;
+    opp[d] += b;
   }
-  return { shares: Array.from(votes, (v, d) => (pop[d] ? v / pop[d] : 0)), swing: unc.state[s] };
+  return {
+    shares: Array.from(you, (v, d) => (v + opp[d] ? v / (v + opp[d]) : 0)),
+    swing: unc.state[s],
+    turnout: unc.tState ? unc.tState[s] : null,
+    gap: unc.gap ? unc.gap[s] : null,
+  };
 }
 
 // The k-th highest district vote share. Because swings are mostly shared,
@@ -650,17 +711,19 @@ function annealRobust(tiles, start, n, ideal, rand, o) {
   const k = o.k;
   const assign = start.slice();
   const pop = new Array(n).fill(0);
+  const cast = new Array(n).fill(0); // votes cast
   const votes = new Array(n).fill(0);
   const size = new Array(n).fill(0);
   for (const t of tiles) {
     const d = assign[t.id];
     pop[d] += t.pop;
-    votes[d] += (t.pop * t.lean) / 100;
+    cast[d] += votersOf(t);
+    votes[d] += (votersOf(t) * t.lean) / 100;
     size[d]++;
   }
   const tolAbs = ideal * o.tol;
   const excess = (p) => Math.max(0, Math.abs(p - ideal) - tolAbs) / ideal;
-  const shares = pop.map((p, d) => votes[d] / p);
+  const shares = cast.map((c, d) => votes[d] / c);
   const score = () => {
     const sorted = shares.slice().sort((a, b) => b - a);
     let top = 0;
@@ -695,11 +758,12 @@ function annealRobust(tiles, start, n, ideal, rand, o) {
     if (a === b || size[a] === 1) continue;
 
     const p = tiles[i].pop;
-    const v = (p * tiles[i].lean) / 100;
+    const c = votersOf(tiles[i]);
+    const v = (c * tiles[i].lean) / 100;
     const oldA = shares[a];
     const oldB = shares[b];
-    shares[a] = (votes[a] - v) / (pop[a] - p);
-    shares[b] = (votes[b] + v) / (pop[b] + p);
+    shares[a] = (votes[a] - v) / (cast[a] - c);
+    shares[b] = (votes[b] + v) / (cast[b] + c);
     const newPenalty = penalty - excess(pop[a]) - excess(pop[b]) + excess(pop[a] - p) + excess(pop[b] + p);
     const newEnergy = score() - o.penW * newPenalty;
     const delta = newEnergy - energy;
@@ -729,8 +793,8 @@ function annealRobust(tiles, start, n, ideal, rand, o) {
 
     const wasBad = (excess(pop[a]) > 0 ? 1 : 0) + (excess(pop[b]) > 0 ? 1 : 0);
     assign[i] = b;
-    pop[a] -= p; votes[a] -= v; size[a]--;
-    pop[b] += p; votes[b] += v; size[b]++;
+    pop[a] -= p; cast[a] -= c; votes[a] -= v; size[a]--;
+    pop[b] += p; cast[b] += c; votes[b] += v; size[b]++;
     bad += (excess(pop[a]) > 0 ? 1 : 0) + (excess(pop[b]) > 0 ? 1 : 0) - wasBad;
     penalty = newPenalty;
     energy = newEnergy;
@@ -751,13 +815,24 @@ function findRobustPlan(tiles, n, ideal, target, starts, rand, tol, iters = 3000
 }
 
 function planShares(tiles, plan, n) {
-  const pop = new Array(n).fill(0);
+  const cast = new Array(n).fill(0);
   const votes = new Array(n).fill(0);
   for (const t of tiles) {
-    pop[plan[t.id]] += t.pop;
-    votes[plan[t.id]] += (t.pop * t.lean) / 100;
+    cast[plan[t.id]] += votersOf(t);
+    votes[plan[t.id]] += (votersOf(t) * t.lean) / 100;
   }
-  return pop.map((p, d) => votes[d] / p);
+  return cast.map((c, d) => votes[d] / c);
+}
+
+// Turnout for a generated Realistic map: crowded tiles vote less, plus local variation.
+function assignTurnout(tiles, rand) {
+  const pops = tiles.map((t) => t.pop);
+  const lo = Math.min(...pops);
+  const hi = Math.max(...pops);
+  for (const t of tiles) {
+    const density = (t.pop - lo) / (hi - lo || 1);
+    t.turnout = Math.round(Math.min(0.85, Math.max(0.4, 0.7 - 0.14 * density + (rand() - 0.5) * 0.12)) * 1000) / 1000;
+  }
 }
 
 // Like generateMap, but the target is a PASS_PROBABILITY chance of winning
@@ -772,10 +847,12 @@ function generateRealisticMap(sizeKey, seed) {
     const rand = mulberry32(seed * 7919 + attempt + 500009);
     const tiles = buildGrid(cfg.cols, cfg.rows);
     generateGeography(tiles, cfg, rand, REALISTIC_SHARE_RANGE);
+    assignTurnout(tiles, mulberry32(seed * 7919 + attempt + 900007));
 
     const totalPop = tiles.reduce((s, t) => s + t.pop, 0);
     const ideal = totalPop / n;
-    const statewideShare = tiles.reduce((s, t) => s + (t.pop * t.lean) / 100, 0) / totalPop;
+    const totalCast = tiles.reduce((s, t) => s + votersOf(t), 0);
+    const statewideShare = tiles.reduce((s, t) => s + (votersOf(t) * t.lean) / 100, 0) / totalCast;
     if (statewideShare >= 0.5) continue;
 
     const samples = sampleLegalPlans(tiles, n, ideal, rand);
@@ -790,8 +867,8 @@ function generateRealisticMap(sizeKey, seed) {
 
     const map = {
       sizeKey, cfg, seed, tiles, ideal, target, totalPop, statewideShare,
-      tolerance: TOLERANCE, mode: 'percent', lesson: null, realistic: true,
-      unc: buildUncertainty(tiles, seed * 31 + attempt),
+      tolerance: TOLERANCE, mode: 'percent', lesson: null, realistic: true, turnout: true,
+      unc: buildUncertainty(tiles, seed * 31 + attempt, true),
       solution: best.plan, winFraction, sampleCount: samples.length,
     };
     const chance = simulatePlan(map, best.plan).pTarget;
@@ -936,6 +1013,7 @@ const ui = {
   sim: null,          // simulation results for the current plan (realistic maps only)
   cushions: null,     // swing each district can absorb (realistic maps only)
   swing: 0,           // stress-test swing toward your candidate, as a fraction (0.02 = 2 points)
+  turnoutGap: 0,      // stress-test turnout gap: > 0 means your side's voters turn out more (0.04 = 4%)
   scenario: null,     // district shares under that swing
   painting: null,
   lastPainted: null,
@@ -1066,7 +1144,7 @@ function renderLesson() {
 const unitWord = () => (game.mode === 'voters' ? 'voters' : 'people');
 const supports = (t) => t.lean > 50;
 const votesFor = (s) => Math.round(s.votes);
-const votesAgainst = (s) => Math.round(s.pop - s.votes);
+const votesAgainst = (s) => Math.round(s.voters - s.votes);
 
 function shareText(s) {
   if (game.mode === 'percent') return fmtPct(s.share);
@@ -1117,10 +1195,11 @@ function buildStateMap(code, party, realistic) {
   const P = S.parties[party];
   const tiles = buildMaskedGrid(S.cols, S.rows, S.cells);
   tiles.forEach((t, i) => {
-    const [, , pop, dem, county] = S.cells[i];
+    const [, , pop, dem, county, turnout] = S.cells[i];
     t.pop = pop;
     t.lean = party === 'dem' ? dem : Math.round((100 - dem) * 10) / 10;
     t.county = S.counties[county];
+    if (realistic) t.turnout = turnout / 100; // real 2020 turnout, Realistic mode only
   });
   const totalPop = tiles.reduce((a, t) => a + t.pop, 0);
   return {
@@ -1140,7 +1219,8 @@ function buildStateMap(code, party, realistic) {
     mode: 'percent',
     lesson: null,
     realistic,
-    unc: realistic ? buildUncertainty(tiles, P.uncSeed) : null,
+    turnout: realistic,
+    unc: realistic ? buildUncertainty(tiles, P.uncSeed, true) : null,
     solution: (realistic ? P.robustSolution : P.solution).slice(),
     winFraction: realistic ? P.realisticFraction : P.winFraction,
     sampleCount: P.sampleCount,
@@ -1172,7 +1252,9 @@ function loadMap(map) {
   ui.tool = 0;
   ui.revealed = false;
   ui.swing = 0;
+  ui.turnoutGap = 0;
   if (!game.realistic && ui.view === 'regions') ui.view = 'votes';
+  if (!game.turnout && ui.view === 'turnout') ui.view = 'votes';
   try {
     const url = new URL(window.location.href);
     for (const key of ['size', 'seed', 'tutorial', 'mode', 'state', 'party']) url.searchParams.delete(key);
@@ -1216,7 +1298,23 @@ function chanceWord(p) {
 // Region colours avoid the red/blue vote scale.
 const REGION_RGB = [[142, 107, 191], [76, 160, 110], [217, 164, 58], [150, 110, 80]];
 const fmtSwing = (x) => (x > 0 ? '+' : x < 0 ? '−' : '±') + Math.abs(x * 100).toFixed(1);
-const stressTesting = () => ui.scenario && ui.swing !== 0;
+const stressTesting = () => !!ui.scenario && (ui.swing !== 0 || ui.turnoutGap !== 0);
+// "a −2.5 point swing and a +4% turnout gap", for labels
+function stressText() {
+  const parts = [];
+  if (ui.swing) parts.push(`a ${fmtSwing(ui.swing)} point swing`);
+  if (ui.turnoutGap) parts.push(`a ${ui.turnoutGap > 0 ? '+' : '−'}${Math.abs(Math.round(ui.turnoutGap * 100))}% turnout gap`);
+  return parts.join(' and ');
+}
+
+// Turnout colour view: pale (low) to deep purple (high).
+const TURNOUT_RGB = [94, 60, 153];
+const TURNOUT_LO = 0.4;
+const TURNOUT_HI = 0.85;
+function turnoutColor(x) {
+  const a = Math.max(0, Math.min(1, (x - TURNOUT_LO) / (TURNOUT_HI - TURNOUT_LO)));
+  return `rgb(${NEUTRAL_RGB.map((v, i) => Math.round(v + (TURNOUT_RGB[i] - v) * a)).join(',')})`;
+}
 
 // Tile colour in the Regions view: the colour of the region whose swing
 // affects the tile most, paler where several regions overlap.
@@ -1231,14 +1329,19 @@ function regionColor(i) {
 
 // Vote share shown for a tile, including any stress-test swing.
 function shownLean(t) {
-  if (!ui.swing || !game.realistic) return t.lean;
-  return Math.round(clampShare(t.lean / 100 + ui.swing) * 100);
+  if ((!ui.swing && !ui.turnoutGap) || !game.realistic) return t.lean;
+  return Math.round(tileShareAt(t, ui.swing, ui.turnoutGap) * 100);
 }
 
 function sizeLegend() {
   if (!sizedTiles()) return '';
   const hex = (r) => `<svg viewBox="-12 -12 24 24" width="18" height="18" aria-hidden="true">
       <polygon points="${hexPoints(0, 0, 11)}" class="lg-rim"/><polygon points="${hexPoints(0, 0, 11 * r)}" class="lg-core"/></svg>`;
+  if (game.turnout) {
+    const pair = `<svg viewBox="-12 -12 24 24" width="18" height="18" aria-hidden="true">
+      <polygon points="${hexPoints(0, 0, 11)}" class="lg-outline"/><polygon points="${hexPoints(0, 0, 7.5)}" class="lg-core"/></svg>`;
+    return `<span class="legend-size">${pair}<span>Outline = residents, filled = votes cast</span></span>`;
+  }
   return `<span class="legend-size">${hex(0.4)}${hex(0.94)}<span>Inner hex size = population</span></span>`;
 }
 
@@ -1246,6 +1349,13 @@ function renderLegend() {
   const opp = `rgb(${oppRGB().join(',')})`;
   const you = `rgb(${youRGB().join(',')})`;
   const bar = `<span class="legend-bar" aria-hidden="true" style="background:linear-gradient(90deg, ${opp}, rgb(${NEUTRAL_RGB.join(',')}), ${you})"></span>`;
+  if (ui.view === 'turnout') {
+    els.legend.innerHTML = `<span>Turnout ${Math.round(TURNOUT_LO * 100)}%</span>
+      <span class="legend-bar" aria-hidden="true" style="background:linear-gradient(90deg, ${turnoutColor(TURNOUT_LO)}, ${turnoutColor(TURNOUT_HI)})"></span>
+      <span>${Math.round(TURNOUT_HI * 100)}%</span>
+      <span class="legend-note">Share of adults who voted. Districts are equal in people but decided by votes cast.</span>`;
+    return;
+  }
   if (ui.view === 'regions') {
     const chips = REGION_RGB.map((c, r) =>
       `<span class="legend-chip" style="background:rgb(${c.join(',')})" aria-hidden="true"></span><span>${'ABCD'[r]}</span>`).join('');
@@ -1256,7 +1366,7 @@ function renderLegend() {
     els.legend.innerHTML = `
       <span>Opponent wins big</span>
       <span class="legend-scale">${bar}<span class="legend-mid">close</span></span>
-      <span>You win big</span><span class="legend-note">at a ${fmtSwing(ui.swing)} point swing</span>`;
+      <span>You win big</span><span class="legend-note">at ${stressText()}</span>`;
   } else if (ui.view === 'results' && game.realistic) {
     els.legend.innerHTML = `
       <span>Safe for opponent</span>
@@ -1277,7 +1387,7 @@ function renderLegend() {
   els.legend.insertAdjacentHTML('beforeend', sizeLegend());
   if (game.realistic) {
     els.legend.insertAdjacentHTML('beforeend', stressTesting()
-      ? `<span class="legend-note">Stress test: badges show results at a ${fmtSwing(ui.swing)} point swing</span>`
+      ? `<span class="legend-note">Stress test: badges show results at ${stressText()}</span>`
       : '<span class="legend-note">Badges show each district\'s chance to win</span>');
   }
 }
@@ -1294,12 +1404,15 @@ function buildBoard() {
   tileEls = game.tiles.map((t) => {
     const g = svgEl('g', { class: 'tile', 'data-id': t.id });
     const poly = svgEl('polygon', { class: 'hex', points: hexPoints(t.x, t.y, HEX) });
-    const inner = svgEl('polygon', { class: 'inner', points: hexPoints(t.x, t.y, HEX * popScale(t)) });
+    // With turnout, the filled inner hex is sized by votes cast and an outline shows residents.
+    const voteScale = game.turnout ? popScale(t) * Math.sqrt(t.turnout) : popScale(t);
+    const inner = svgEl('polygon', { class: 'inner', points: hexPoints(t.x, t.y, HEX * voteScale) });
+    const outline = svgEl('polygon', { class: 'pop-outline', points: hexPoints(t.x, t.y, HEX * popScale(t)) });
     const main = svgEl('text', { class: 'num', x: t.x, y: t.y + 7 });
     const sub = svgEl('text', { class: 'sub', x: t.x, y: t.y + 21 });
-    g.append(poly, inner, main, sub);
+    g.append(poly, inner, outline, main, sub);
     gTiles.append(g);
-    return { g, poly, inner, main, sub };
+    return { g, poly, inner, outline, main, sub };
   });
   els.defs = svgEl('defs');
   els.borderGroup = svgEl('g', { class: 'district-borders' });
@@ -1318,6 +1431,9 @@ const sizedTiles = () => SIZE_TILES_BY_POPULATION && game.mode !== 'voters' && u
 
 function tileText(t) {
   if (ui.label === 'none' && game.mode === 'percent') return ['', ''];
+  if (game.turnout && (ui.label === 'turnout' || (ui.view === 'turnout' && ui.label === 'lean'))) {
+    return [Math.round(t.turnout * 100) + '%', ui.view === 'turnout' ? '' : 'turnout'];
+  }
   if (game.mode === 'voters') return [supports(t) ? '✓' : '✗', ''];
   if (game.mode === 'binary') return [fmtInt(t.pop), supports(t) ? '✓' : '✗'];
   if (ui.label === 'both') return [fmtK(t.pop), shownLean(t) + '%'];
@@ -1331,16 +1447,18 @@ function renderTiles(stats) {
     const d = ui.assign[t.id];
     let fill = null;
     if (ui.view === 'votes') fill = leanColor(shownLean(t));
+    else if (ui.view === 'turnout') fill = turnoutColor(t.turnout);
     else if (ui.view === 'regions') fill = regionColor(t.id);
     else if (d >= 0 && ui.view === 'districts') fill = DISTRICT_COLORS[d];
     else if (d >= 0 && stressTesting()) fill = leanColor(ui.scenario[d] * 100, RESULT_SPAN);
     else if (d >= 0 && ui.sim) fill = leanColor(50 + (ui.sim.winProb[d] - 0.5) * 40, 20);
     else if (d >= 0) fill = leanColor(stats[d].share * 100, RESULT_SPAN);
-    const sized = sizedTiles() && ui.view !== 'regions' && fill;
+    const sized = sizedTiles() && ui.view !== 'regions' && ui.view !== 'turnout' && fill;
     el.poly.style.fill = fill || 'var(--unassigned)';
     el.poly.style.fillOpacity = sized ? '0.25' : '';
     el.inner.style.display = sized ? '' : 'none';
     if (sized) el.inner.style.fill = fill;
+    el.outline.style.display = sized && game.turnout ? '' : 'none';
 
     const [main, sub] = tileText(t);
     // On sized tiles text can sit over both the inner hex and the pale rim, so it gets a halo.
@@ -1468,6 +1586,9 @@ function showTooltip(id, e) {
     const part = t.county.hexes > 1 ? ` (1 of ${t.county.hexes} hexes)` : '';
     body = `${t.county.name}${part}<br>Population ${fmtInt(t.pop)}<br>${youName()} ${t.lean}% · ${oppName()} ${Math.round((100 - t.lean) * 10) / 10}%`;
   } else body = `Population ${fmtInt(t.pop)}<br>You ${t.lean}% · Opponent ${100 - t.lean}%`;
+  if (game.turnout && game.mode === 'percent') {
+    body += `<br>Turnout ${Math.round(t.turnout * 100)}% · ${fmtInt(votersOf(t))} votes`;
+  }
   const title = d >= 0
     ? `<span class="tt-dot" style="background:${DISTRICT_COLORS[d]}"></span>District ${d + 1}`
     : 'Not in a district';
@@ -1482,7 +1603,7 @@ function showTooltip(id, e) {
       result += `<br><span class="tt-result">Win chance: ${fmtChance(ui.sim.winProb[d])} (${chanceWord(ui.sim.winProb[d])})</span>`;
       if (r) result += `<br><span class="tt-result">Likely ${fmtPct(r.q25, 0)}–${fmtPct(r.q75, 0)} · plausible ${fmtPct(r.q05, 0)}–${fmtPct(r.q95, 0)}</span>`;
       if (c != null) result += `<br><span class="tt-result">${cushionText(c)}</span>`;
-      if (stressTesting()) result += `<br><span class="tt-result">At a ${fmtSwing(ui.swing)} swing: ${fmtPct(ui.scenario[d])}</span>`;
+      if (stressTesting()) result += `<br><span class="tt-result">At ${stressText()}: ${fmtPct(ui.scenario[d])}</span>`;
     }
   }
   els.tooltip.innerHTML = `<strong>${title}</strong><br>${body}${result}`;
@@ -1521,7 +1642,7 @@ function renderStatus(stats) {
         : `needs <strong class="bad">${(-b * 100).toFixed(1)}</strong> pts toward you`);
     if (stressTesting()) {
       const seatsAt = ui.scenario.filter((x) => x > 0.5).length;
-      html += item(`At ${fmtSwing(ui.swing)} swing`,
+      html += item('Stress test',
         `<strong class="${seatsAt >= game.target ? 'ok' : 'bad'}">${seatsAt}</strong> of ${n} seats`);
     }
   } else {
@@ -1555,6 +1676,9 @@ function renderMission(stats) {
     }
     if (game.realistic) {
       intro += ` <span class="muted">Results are uncertain: on election day the state can swing a few points either way.</span>`;
+      if (game.turnout) {
+        intro += ` <span class="muted">Turnout also varies: districts must be equal in people, but are decided by the votes actually cast.</span>`;
+      }
     }
   } else {
     const yes = Math.round(game.statewideShare * game.totalPop);
@@ -1656,7 +1780,8 @@ function renderDistrictList(stats) {
     if (game.mode === 'voters') {
       popEl.textContent = `${s.pop} of ${fmtInt(game.ideal)} voters`;
     } else {
-      popEl.innerHTML = `${fmtInt(s.pop)} people <small>(${fmtSigned(s.dev)})</small>`;
+      popEl.innerHTML = `${fmtInt(s.pop)} people <small>(${fmtSigned(s.dev)})</small>` +
+        (game.turnout ? ` <small class="votes-cast">· ${fmtK(Math.round(s.voters))} votes</small>` : '');
     }
     statusEl.className = 'd-status ' + (issue ? 'bad' : 'ok');
     statusEl.textContent = issue ? `⚠ ${issue}` : '✓ Legal';
@@ -1681,9 +1806,11 @@ const fcPos = (x) => `${(Math.min(1, Math.max(0, (x - FC_MIN) / (FC_MAX - FC_MIN
 function cushionText(c) {
   if (c >= 0.5) return 'Safe at any swing';
   if (c <= -0.5) return 'Cannot be won';
+  const n = Math.abs(c * 100).toFixed(1);
+  const an = /^(8|11|18)(\.|$)/.test(n) || n.startsWith('8') ? 'an' : 'a';
   return c > 0
-    ? `Flips after a ${(c * 100).toFixed(1)}-point swing against you`
-    : `Needs a ${(-c * 100).toFixed(1)}-point swing toward you`;
+    ? `Flips after ${an} ${n}-point swing against you`
+    : `Needs ${an} ${n}-point swing toward you`;
 }
 
 // Forecast bar: plausible range (middle 90%), likely range (middle 50%),
@@ -1722,11 +1849,17 @@ function renderControls() {
   for (const btn of els.viewButtons) {
     btn.setAttribute('aria-pressed', String(btn.dataset.view === ui.view));
     if (btn.dataset.view === 'regions') btn.hidden = !game.realistic;
+    if (btn.dataset.view === 'turnout') btn.hidden = !game.turnout;
   }
   els.uncertaintyBar.hidden = !game.realistic;
   els.swingSlider.value = String(Math.round(ui.swing * 1000) / 10);
   els.swingValue.textContent = ui.swing === 0 ? 'none' : `${fmtSwing(ui.swing)} pts ${ui.swing > 0 ? 'toward you' : 'toward opponent'}`;
-  els.swingReset.disabled = ui.swing === 0;
+  els.swingReset.disabled = ui.swing === 0 && ui.turnoutGap === 0;
+  els.gapGroup.hidden = !game.turnout;
+  els.gapSlider.value = String(Math.round(ui.turnoutGap * 100));
+  els.gapValue.textContent = ui.turnoutGap === 0 ? 'even'
+    : `${Math.abs(Math.round(ui.turnoutGap * 100))}% more ${ui.turnoutGap > 0 ? 'of your voters' : "of the opponent's voters"}`;
+  for (const btn of els.labelButtons) if (btn.dataset.label === 'turnout') btn.hidden = !game.turnout;
   for (const btn of els.labelButtons) btn.setAttribute('aria-pressed', String(btn.dataset.label === ui.label));
   els.labelToggle.hidden = game.mode !== 'percent';
   els.partyToggle.hidden = !game.state;
@@ -1750,8 +1883,8 @@ function render() {
   const stats = currentStats();
   ui.sim = game.realistic ? simulatePlan(game, ui.assign) : null;
   ui.cushions = game.realistic ? computeCushions(game, ui.assign) : null;
-  ui.scenario = game.realistic && ui.swing !== 0
-    ? districtTileIds(game, ui.assign).map((ids) => swungShare(game.tiles, ids, ui.swing))
+  ui.scenario = game.realistic && (ui.swing !== 0 || ui.turnoutGap !== 0)
+    ? districtTileIds(game, ui.assign).map((ids) => swungShare(game.tiles, ids, ui.swing, ui.turnoutGap))
     : null;
   renderTiles(stats);
   renderBorders();
@@ -1833,7 +1966,11 @@ function bindEvents() {
     ui.swing = Number(els.swingSlider.value) / 100;
     render();
   });
-  els.swingReset.addEventListener('click', () => { ui.swing = 0; render(); });
+  els.swingReset.addEventListener('click', () => { ui.swing = 0; ui.turnoutGap = 0; render(); });
+  els.gapSlider.addEventListener('input', () => {
+    ui.turnoutGap = Number(els.gapSlider.value) / 100;
+    render();
+  });
   els.uncertaintyInfo.addEventListener('click', showUncertaintyInfo);
   for (const btn of els.partyButtons) {
     btn.addEventListener('click', () => {
@@ -1861,11 +1998,13 @@ function bindEvents() {
     else if (e.key === '0' && game.cfg.districts >= 10) setTool(9);
     else if (e.key === 'e' || e.key === 'E') setTool('erase');
     else if (e.key === 'v' || e.key === 'V') {
-      const order = game.realistic ? ['votes', 'districts', 'results', 'regions'] : ['votes', 'districts', 'results'];
+      const order = ['votes', 'districts', 'results'];
+      if (game.realistic) order.push('regions');
+      if (game.turnout) order.push('turnout');
       setView(order[(order.indexOf(ui.view) + 1) % order.length]);
     }
     else if ((e.key === 'l' || e.key === 'L') && game.mode === 'percent') {
-      const order = ['lean', 'pop', 'both', 'none'];
+      const order = game.turnout ? ['lean', 'pop', 'both', 'turnout', 'none'] : ['lean', 'pop', 'both', 'none'];
       setLabel(order[(order.indexOf(ui.label) + 1) % order.length]);
     }
   });
@@ -1933,9 +2072,9 @@ function fairnessMetrics(stats) {
   let total = 0;
   for (const s of stats) {
     const you = s.votes;
-    const opp = s.pop - s.votes;
-    const half = s.pop / 2;
-    total += s.pop;
+    const opp = s.voters - s.votes;
+    const half = s.voters / 2;
+    total += s.voters;
     // Wasted votes: every vote for the loser, and the winner's votes beyond 50%.
     if (you > half) { wastedYou += you - half; wastedOpp += opp; } else { wastedOpp += opp - half; wastedYou += you; }
   }
@@ -2100,6 +2239,11 @@ function showUncertaintyInfo() {
           The <em>Regions</em> colour view shows which tiles move together.</li>
       <li><strong>Local noise</strong> — different for each tile, typically ±${pts(SWING_TILE)} points.</li>
     </ul>
+    ${game.turnout ? `<p><strong>Turnout</strong> varies too. Each hex has its own turnout (the share of adults who vote${game.state ? ', from the real 2020 results' : ''}).
+       Districts must be equal in <em>people</em>, but they are decided by the <em>votes cast</em>, so a district full of low-turnout
+       areas is decided by fewer votes. In each election, turnout across the state rises or falls by about ±${pts(TURNOUT_STATE)}% of its usual level,
+       one side's voters can turn out about ${pts(TURNOUT_GAP)}% more than the other's (an "enthusiasm gap"), and each hex varies by about
+       ±${pts(TURNOUT_TILE)}%. On the map, the outline is a hex's residents and the filled hex its votes cast.</p>` : ''}
     <p>"Typically" means about 2 elections in 3 fall within that range; bigger moves happen less often.
        Because most of the swing is shared, narrow districts tend to flip <em>together</em>.</p>
     <p>The game runs ${SIMULATIONS.toLocaleString('en-US')} simulated elections. You win if your map reaches the seat target in at least
@@ -2111,6 +2255,7 @@ function showUncertaintyInfo() {
       <li><strong>Breaking point</strong> (status bar): the statewide swing against you that would cost you the target.
           A bigger number means a sturdier map.</li>
       <li><strong>Swing slider</strong>: apply a statewide swing to see which districts fall first.</li>
+      ${game.turnout ? `<li><strong>Turnout gap slider</strong>: make one side's voters turn out more than the other's.</li>` : ''}
     </ul>`, [{ label: 'Got it', primary: true }]);
 }
 
@@ -2124,9 +2269,16 @@ function holdRealisticElection(stats) {
   const night = simulateOne(game, ui.assign, Math.floor(Math.random() * game.unc.sims));
   const nightSeats = night.shares.filter((x) => x > 0.5).length;
   const swingPts = Math.abs(night.swing * 100).toFixed(1);
-  const swingText = Math.abs(night.swing) < 0.005
+  let swingText = Math.abs(night.swing) < 0.005
     ? 'barely moved'
     : `swung ${swingPts} points toward ${night.swing > 0 ? 'your candidate' : 'the opponent'}`;
+  if (night.turnout != null) {
+    const tPts = Math.abs(night.turnout * 100).toFixed(0);
+    const gPts = Math.abs(night.gap * 100).toFixed(0);
+    swingText += `, turnout was ${tPts}% ${night.turnout >= 0 ? 'higher' : 'lower'} than usual`;
+    swingText += gPts === '0' ? ', with both sides turning out evenly'
+      : `, and ${night.gap > 0 ? 'your' : "the opponent's"} voters turned out ${gPts}% more`;
+  }
 
   const rows = stats.map((s, d) => {
     const p = sim.winProb[d];
@@ -2213,6 +2365,9 @@ function init() {
   els.uncertaintyBar = $('#uncertainty-bar');
   els.swingSlider = $('#swing-slider');
   els.swingValue = $('#swing-value');
+  els.gapGroup = $('#gap-group');
+  els.gapSlider = $('#gap-slider');
+  els.gapValue = $('#gap-value');
   els.swingReset = $('#swing-reset');
   els.uncertaintyInfo = $('#uncertainty-info');
 
@@ -2237,7 +2392,7 @@ function init() {
     els.size.append(real);
   }
   ui.party = storageGet(PARTY_KEY) === 'rep' ? 'rep' : 'dem';
-  if (['pop', 'both', 'none'].includes(storageGet(LABEL_KEY))) ui.label = storageGet(LABEL_KEY);
+  if (['pop', 'both', 'none', 'turnout'].includes(storageGet(LABEL_KEY))) ui.label = storageGet(LABEL_KEY);
 
   const params = new URLSearchParams(window.location.search);
   const stateParam = findState(params.get('state')) ? params.get('state') : null;

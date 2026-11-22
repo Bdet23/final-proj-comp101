@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Gerrymander</title>
   <meta name="description" content="Draw district lines on a hex map so your candidate wins the most seats.">
-  <link rel="stylesheet" href="style.css?v=13">
+  <link rel="stylesheet" href="style.css?v=14">
 </head>
 <body>
   <header class="topbar">
@@ -59,12 +59,14 @@
           <button type="button" data-view="districts">Districts</button>
           <button type="button" data-view="results">Results</button>
           <button type="button" data-view="regions" hidden>Regions</button>
+          <button type="button" data-view="turnout" hidden>Turnout</button>
         </div>
         <div class="segmented" id="label-toggle" role="group" aria-label="Number shown on tiles">
           <span class="seg-label">Show</span>
           <button type="button" data-label="lean">Vote %</button>
           <button type="button" data-label="pop">Population</button>
           <button type="button" data-label="both">Both</button>
+          <button type="button" data-label="turnout" hidden>Turnout</button>
           <button type="button" data-label="none">None</button>
         </div>
         <button id="reset" type="button" class="ghost">Clear districts</button>
@@ -77,6 +79,13 @@
                aria-describedby="swing-value">
         <span class="swing-end">toward you</span>
         <span id="swing-value" class="swing-value">none</span>
+        <span id="gap-group" class="gap-group" hidden>
+          <label class="swing-label" for="gap-slider">Turnout gap</label>
+          <span class="swing-end">opponent</span>
+          <input type="range" id="gap-slider" min="-10" max="10" step="1" value="0" aria-describedby="gap-value">
+          <span class="swing-end">you</span>
+          <span id="gap-value" class="swing-value">even</span>
+        </span>
         <button id="swing-reset" type="button" class="ghost">Reset</button>
         <button id="uncertainty-info" type="button" class="link-btn">How uncertain?</button>
       </div>
@@ -121,7 +130,7 @@
     <div class="dialog-actions" id="result-actions"></div>
   </dialog>
 
-  <script src="states.js?v=13"></script>
-  <script src="game.js?v=13"></script>
+  <script src="states.js?v=14"></script>
+  <script src="game.js?v=14"></script>
 </body>
 </html>
