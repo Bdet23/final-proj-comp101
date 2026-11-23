@@ -798,3 +798,120 @@ body.start-open { overflow: hidden; }
   .logo-hex { width: 52px; height: 52px; }
   .start-inner { padding-top: 1.5rem; }
 }
+
+/* ---------- Compact layout ---------- */
+/* Command bar: mission checklist and key numbers in one compact panel. */
+.command {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem 1rem;
+  margin-bottom: 0.5rem;
+  padding: 0.55rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-2);
+}
+.command .mission { flex: 1 1 520px; margin: 0; padding: 0; border: none; background: none; min-width: 0; }
+.mission .mission-intro { margin: 0 0 0.35rem; font-size: 0.98rem; line-height: 1.4; }
+.mission-label {
+  font-size: 0.72rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em;
+  color: var(--accent); margin-right: 0.3rem;
+}
+.mission-meta { cursor: help; color: var(--muted); margin-left: 0.2rem; }
+.mission .checklist { display: flex; flex-wrap: wrap; gap: 0.3rem 0.45rem; margin: 0; grid-template-columns: none; }
+.mission .checklist li {
+  display: inline-flex; align-items: center; gap: 0.35rem;
+  padding: 0.18rem 0.55rem 0.18rem 0.25rem;
+  border: 1px solid var(--border); border-radius: 999px; background: var(--surface);
+  font-size: 0.92rem;
+}
+.mission .checklist li.done { border-color: color-mix(in srgb, var(--good) 45%, var(--border)); }
+.mission .checklist li.done .c-text { color: var(--text); }
+.mission .check { width: 18px; height: 18px; font-size: 0.7rem; }
+.mission .c-count { font-size: 0.85rem; }
+.command .statusbar {
+  position: static; margin: 0; padding: 0; border: none; background: none;
+  flex: 0 1 auto; gap: 0.3rem 1rem; flex-wrap: nowrap;
+}
+.command .status-items { gap: 0.2rem 1rem; flex-wrap: wrap; }
+.command .s-label { font-size: 0.68rem; }
+.command .s-value { font-size: 0.95rem; white-space: nowrap; }
+.command .s-value strong { font-size: 1.2rem; }
+.command .statusbar .primary { margin-left: 0.5rem; padding: 0.5rem 1rem; white-space: nowrap; }
+
+/* Toolbar: smaller controls. */
+.board-toolbar { gap: 0.35rem 0.75rem; margin-bottom: 0.35rem; }
+.board-toolbar .segmented button { padding: 0.22rem 0.55rem; font-size: 0.85rem; }
+.board-toolbar .seg-label { font-size: 0.8rem; margin-right: 0.35rem; }
+.board-toolbar .ghost, .small-btn { padding: 0.22rem 0.6rem; font-size: 0.85rem; }
+.board-toolbar .link-btn { margin-left: 0; font-size: 0.85rem; }
+.uncertainty-bar { margin-bottom: 0.35rem; padding: 0.3rem 0.5rem; font-size: 0.85rem; }
+
+/* Tighter panels above the board. */
+.lesson { padding: 0.5rem 0.75rem; margin-bottom: 0.5rem; }
+.lesson-head { margin-bottom: 0.2rem; }
+.lesson h2 { font-size: 1rem; margin-bottom: 0.15rem; }
+.lesson p { margin: 0.15rem 0; font-size: 0.9rem; line-height: 1.4; }
+.lesson .step { width: 1.6rem; height: 1.6rem; font-size: 0.78rem; }
+.campaign { padding: 0.55rem 0.75rem; margin-bottom: 0.5rem; }
+.timeline { margin: 0.35rem 0; }
+.tl-year { min-height: 0; padding: 0.15rem 0.1rem; flex-direction: row; justify-content: center; gap: 0.25rem; flex-wrap: wrap; }
+.camp-lead { margin: 0.3rem 0 0.4rem; font-size: 0.95rem; }
+.event-card { padding: 0.5rem 0.7rem; }
+.event-card h3 { font-size: 1rem; margin: 0 0 0.2rem; }
+.event-card p { margin: 0.2rem 0; font-size: 0.92rem; }
+.choices { margin: 0.4rem 0 0.2rem; gap: 0.45rem; }
+.choice { padding: 0.4rem 0.6rem; gap: 0.1rem; }
+.legend { margin-top: 0.3rem; font-size: 0.82rem; }
+
+/* Sidebar: compact district rows. */
+.sidebar .card { padding: 0.7rem; }
+.sidebar h2 { font-size: 1rem; margin-bottom: 0.35rem; }
+.sidebar h2 .hint { display: block; font-weight: 400; margin: 0.1rem 0 0; font-size: 0.8rem; }
+.district-head { padding: 0 0.5rem 0.2rem; font-size: 0.68rem; grid-template-columns: 24px minmax(0, 1fr) auto; }
+.district-list { gap: 0.25rem; }
+.district-row { grid-template-columns: 24px minmax(0, 1fr) auto; gap: 0.5rem; padding: 0.3rem 0.5rem; }
+.swatch { width: 24px; height: 24px; font-size: 0.8rem; }
+.d-main { gap: 0.15rem; font-size: 0.85rem; }
+.d-line { display: flex; gap: 0.35rem; align-items: baseline; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.d-status { font-size: 0.78rem; overflow: hidden; text-overflow: ellipsis; }
+.pop-bar { height: 4px; }
+.v-main { font-size: 0.9rem; }
+.v-sub { font-size: 0.72rem; }
+.district-row .forecast { gap: 0.1rem; padding-top: 0; }
+.fc-track { height: 9px; }
+.fc-plausible, .fc-likely { top: 1px; bottom: 1px; }
+.fc-dot { width: 8px; height: 8px; margin: -4px 0 0 -4px; border-width: 1.5px; }
+.fc-text { font-size: 0.72rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tool-btn { margin-top: 0.4rem; padding: 0.3rem; }
+
+/* Desktop: the page fits the window. The board fills the space left in its
+   column, and the sidebar scrolls on its own. */
+@media (min-width: 901px) {
+  body { height: 100vh; height: 100dvh; display: flex; flex-direction: column; overflow: hidden; }
+  .topbar { flex: none; padding: 0.5rem 1rem; }
+  .layout { flex: 1 1 0; min-height: 0; width: 100%; padding: 0.6rem 1rem; gap: 0.75rem; grid-template-rows: minmax(0, 1fr); }
+  .board-wrap { display: flex; flex-direction: column; min-height: 0; overflow-y: auto; padding: 0.6rem; }
+  .board-wrap > * { flex: none; }
+  .board-area { flex: 1 1 0; min-height: 300px; }
+  #board { width: 100%; height: 100%; max-height: none; min-height: 0; }
+  .sidebar { min-height: 0; overflow-y: auto; padding-right: 2px; }
+}
+
+.mission .checklist { flex-direction: row; }
+.mission .checklist li { width: auto; }
+.tool-row { display: flex; gap: 0.4rem; }
+.tool-row .tool-btn { flex: 1; }
+/* Compact header so it stays on one line on laptop screens. */
+.topbar { gap: 0.5rem; }
+.controls { gap: 0.35rem; }
+.controls button, .controls select { padding: 0.32rem 0.65rem; font-size: 0.9rem; }
+.controls .segmented button { padding: 0.32rem 0.6rem; }
+.controls .seg-label, .size-label { font-size: 0.85rem; }
+.brand h1 { font-size: 1.3rem; }
+@media (max-width: 1500px) { .topbar .subtitle { display: none; } }
+@media (min-width: 901px) {
+  .layout { align-items: stretch; }
+  .board-wrap, .sidebar { height: 100%; }
+}

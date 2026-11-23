@@ -71,7 +71,8 @@ function initStartScreen() {
 function renderMuteButton() {
   const m = Sound.isMuted();
   startEls.mute.setAttribute('aria-pressed', String(m));
-  startEls.mute.textContent = m ? '🔇 Sound off' : '🔊 Sound on';
+  startEls.mute.textContent = m ? '🔇' : '🔊';
+  startEls.mute.setAttribute('aria-label', m ? 'Sound off' : 'Sound on');
   startEls.mute.title = m ? 'Turn sound on' : 'Mute all sound';
 }
 

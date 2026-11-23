@@ -1646,8 +1646,6 @@ function showTooltip(id, e) {
 function renderStatus(stats) {
   const n = game.cfg.districts;
   const seats = stats.filter((s) => s.wins).length;
-  const legal = stats.filter(isLegal).length;
-  const assigned = ui.assign.filter((d) => d >= 0).length;
   const item = (label, value) =>
     `<div class="status-item"><span class="s-label">${label}</span><span class="s-value">${value}</span></div>`;
   let html = '';
@@ -1671,9 +1669,7 @@ function renderStatus(stats) {
     html += item('Seats won',
       `<strong class="${seats >= game.target ? 'ok' : ''}">${seats}</strong> of ${n} <span class="need">need ${game.target}</span>`);
   }
-  html += item('Legal districts', `<strong class="${legal === n ? 'ok' : ''}">${legal}</strong> of ${n}`);
-  html += item('Tiles assigned',
-    `<strong class="${assigned === game.tiles.length ? 'ok' : ''}">${assigned}</strong> of ${game.tiles.length}`);
+  // Tiles assigned and legal districts are shown by the mission checklist beside this.
   els.statusItems.innerHTML = html;
 }
 
@@ -1690,18 +1686,12 @@ function renderMission(stats) {
     if (game.state) {
       const S = game.state;
       const a = S.actual2022;
-      intro = `<strong>${S.name}</strong>, ${S.seats} House seats. You are drawing for the <strong>${youName()}</strong>,
-        who won <strong>${fmtPct(game.actualShare)}</strong> of the two-party vote here in 2020.
-        <span class="muted">The real delegation elected in 2022: ${a.dem} Democrats, ${a.rep} Republicans.</span>`;
+      intro = `<strong>${S.name}</strong>, ${S.seats} seats. You draw for the <strong>${youName()}</strong>
+        (<strong>${fmtPct(game.actualShare)}</strong> of the 2020 vote). <span class="muted">Real 2022 result: ${a.dem} D, ${a.rep} R.</span>`;
     } else {
       intro = `Your candidate expects <strong>${fmtPct(game.statewideShare)}</strong> of the statewide vote.`;
     }
-    if (game.realistic) {
-      intro += ` <span class="muted">Results are uncertain: on election day the state can swing a few points either way.</span>`;
-      if (game.turnout) {
-        intro += ` <span class="muted">Turnout also varies: districts must be equal in people, but are decided by the votes actually cast.</span>`;
-      }
-    }
+    if (game.realistic) intro += ' <span class="muted">Results are uncertain.</span>';
   } else {
     const yes = Math.round(game.statewideShare * game.totalPop);
     intro = `Your candidate has <strong>${fmtInt(yes)} of ${fmtInt(game.totalPop)}</strong> ${unitWord()}
@@ -1716,20 +1706,28 @@ function renderMission(stats) {
           `Reach a ${Math.round(PASS_PROBABILITY * 100)}% chance of winning ${game.target}+ of ${n} seats`, `${fmtChance(ui.sim.pTarget)} now`]
       : [seats >= game.target, `Win at least ${game.target} of ${n} seats`, `${seats} now`],
   ];
-  let html = `<h2>Your mission</h2><p>${intro}</p><ul class="checklist">`;
-  for (const [done, text, count] of items) {
-    html += `<li class="${done ? 'done' : ''}">
+  // Short chip labels; the full wording is in each chip's tooltip.
+  const short = [
+    'Every tile used',
+    'Districts in one piece',
+    game.tolerance === 0 ? `${fmtInt(game.ideal)} ${unitWord()} each` : popRangeText().replace(' people', ' people each'),
+    ui.sim ? `${Math.round(PASS_PROBABILITY * 100)}% chance of ${game.target}+ seats` : `Win ${game.target}+ of ${n} seats`,
+  ];
+  let meta = game.lesson != null ? ''
+    : game.state ? `Difficulty: ${difficultyText()} Real data: 2020 presidential results and 2019 Census population estimates by county.`
+      : `Difficulty: ${difficultyText()} Map #${game.seed}.`;
+  if (game.realistic) meta += ' On election day the state can swing a few points either way.';
+  if (game.turnout) meta += ' Turnout varies: districts must be equal in people, but are decided by the votes actually cast.';
+  let html = `<p class="mission-intro"><span class="mission-label">Mission</span> ${intro}
+    ${meta ? `<span class="mission-meta" title="${meta}">ⓘ</span>` : ''}</p><ul class="checklist">`;
+  items.forEach(([done, text, count], i) => {
+    html += `<li class="${done ? 'done' : ''}" title="${text}">
       <span class="check" aria-hidden="true">${done ? '✓' : ''}</span>
-      <span class="c-text">${text}</span>
+      <span class="c-text">${short[i]}</span>
       <span class="c-count">${count}</span>
-      <span class="sr-only">${done ? '(done)' : '(not yet)'}</span></li>`;
-  }
+      <span class="sr-only">${text} ${done ? '(done)' : '(not yet)'}</span></li>`;
+  });
   html += '</ul>';
-  if (game.lesson == null) {
-    html += game.state
-      ? `<p class="muted small">Difficulty: ${difficultyText()} · Real data: 2020 presidential results and 2019 Census population estimates by county.</p>`
-      : `<p class="muted small">Difficulty: ${difficultyText()} · Map #${game.seed}</p>`;
-  }
   els.goal.innerHTML = html;
 }
 
@@ -1752,9 +1750,8 @@ function buildDistrictList() {
     btn.innerHTML = `
       <span class="swatch" style="background:${DISTRICT_COLORS[d]}">${d + 1}</span>
       <span class="d-main">
-        <span class="d-pop"></span>
+        <span class="d-line"><span class="d-pop"></span> <span class="d-status"></span></span>
         <span class="pop-bar"><span class="band"></span><span class="fill"></span></span>
-        <span class="d-status"></span>
       </span>
       <span class="d-vote"><span class="v-main"></span><span class="v-sub"></span></span>
       <span class="forecast" hidden>
@@ -1802,11 +1799,14 @@ function renderDistrictList(stats) {
     if (game.mode === 'voters') {
       popEl.textContent = `${s.pop} of ${fmtInt(game.ideal)} voters`;
     } else {
-      popEl.innerHTML = `${fmtInt(s.pop)} people <small>(${fmtSigned(s.dev)})</small>` +
-        (game.turnout ? ` <small class="votes-cast">· ${fmtK(Math.round(s.voters))} votes</small>` : '');
+      popEl.innerHTML = `${fmtInt(s.pop)} <small>(${fmtSigned(s.dev)})</small>`;
+      row.title = `District ${d + 1}: ${fmtInt(s.pop)} people` + (game.turnout ? `, ${fmtInt(Math.round(s.voters))} votes cast` : '');
     }
     statusEl.className = 'd-status ' + (issue ? 'bad' : 'ok');
-    statusEl.textContent = issue ? `⚠ ${issue}` : '✓ Legal';
+    // Short label in the row; the full problem is in the tooltip.
+    const shortIssue = !issue ? '' : !s.connected ? 'split' : s.dev > 0 ? 'too big' : 'too small';
+    statusEl.textContent = issue ? `⚠ ${shortIssue}` : '✓';
+    statusEl.title = issue ? issue : 'Legal';
 
     vMain.className = 'v-main ' + (s.wins ? 'win' : 'lose');
     if (game.mode === 'percent') {
@@ -1824,6 +1824,12 @@ function renderDistrictList(stats) {
 const FC_MIN = 0.35;
 const FC_MAX = 0.65;
 const fcPos = (x) => `${(Math.min(1, Math.max(0, (x - FC_MIN) / (FC_MAX - FC_MIN))) * 100).toFixed(1)}%`;
+
+function shortCushion(c) {
+  if (c >= 0.5) return 'safe';
+  if (c <= -0.5) return 'unwinnable';
+  return c > 0 ? `flips at −${(c * 100).toFixed(1)}` : `needs +${(-c * 100).toFixed(1)}`;
+}
 
 function cushionText(c) {
   if (c >= 0.5) return 'Safe at any swing';
@@ -1862,8 +1868,9 @@ function renderForecasts() {
     const crosses = r.q05 <= 0.5 && r.q95 > 0.5;
     fc.querySelector('.fc-text').innerHTML =
       `Likely ${fmtPct(r.q25, 0)}–${fmtPct(r.q75, 0)}` +
-      (crosses ? ' · <span class="tossup">range crosses 50%</span>' : '') +
-      `<br>${cushionText(ui.cushions.cushions[d])}`;
+      (crosses ? ' · <span class="tossup">at risk</span>' : '') +
+      ` · ${shortCushion(ui.cushions.cushions[d])}`;
+    fc.title = cushionText(ui.cushions.cushions[d]) + (crosses ? '. Its likely range crosses 50%.' : '.');
   });
 }
 
@@ -1874,7 +1881,11 @@ function renderControls() {
     if (btn.dataset.view === 'turnout') btn.hidden = !game.turnout;
     if (btn.dataset.view === 'change') btn.hidden = !game.campaign;
   }
-  els.uncertaintyBar.hidden = !game.realistic;
+  els.uncertaintyBar.hidden = !(game.realistic && (ui.stressOpen || stressTesting()));
+  els.stressToggle.hidden = !game.realistic;
+  els.uncertaintyInfo.hidden = !game.realistic;
+  els.stressToggle.setAttribute('aria-expanded', String(!els.uncertaintyBar.hidden));
+  els.stressToggle.textContent = els.uncertaintyBar.hidden ? 'Stress test ▾' : 'Stress test ▴';
   els.swingSlider.value = String(Math.round(ui.swing * 1000) / 10);
   els.swingValue.textContent = ui.swing === 0 ? 'none' : `${fmtSwing(ui.swing)} pts ${ui.swing > 0 ? 'toward you' : 'toward opponent'}`;
   els.swingReset.disabled = ui.swing === 0 && ui.turnoutGap === 0;
@@ -2018,6 +2029,11 @@ function bindEvents() {
   // The ambient loop comes back when results (or any dialog) close.
   els.dialog.addEventListener('close', () => Sound.resume());
   els.uncertaintyInfo.addEventListener('click', showUncertaintyInfo);
+  els.stressToggle.addEventListener('click', () => {
+    ui.stressOpen = els.uncertaintyBar.hidden;
+    if (!ui.stressOpen) { ui.swing = 0; ui.turnoutGap = 0; }
+    render();
+  });
   for (const btn of els.partyButtons) {
     btn.addEventListener('click', () => {
       ui.party = btn.dataset.party;
@@ -2441,6 +2457,7 @@ function init() {
   els.gapValue = $('#gap-value');
   els.swingReset = $('#swing-reset');
   els.uncertaintyInfo = $('#uncertainty-info');
+  els.stressToggle = $('#stress-toggle');
 
   const generated = document.createElement('optgroup');
   generated.label = 'Generated maps';
