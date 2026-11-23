@@ -1277,8 +1277,10 @@ function loadMap(map) {
     window.history.replaceState(null, '', url);
   } catch (e) { /* URL updates are optional */ }
   renderLesson();
+  ui.zoom = 'auto';
   buildBoard();
   buildDistrictList();
+  requestAnimationFrame(() => sizeBoard(false));
   render();
 }
 
@@ -1404,11 +1406,52 @@ function renderLegend() {
 }
 
 // ---------- Board rendering ----------
+// ---------- Board size and zoom ----------
+// "Fit" shows the whole map in the space available. Each map opens zoomed so
+// a hex is at least MIN_HEX_PX across (radius), scrolling if it doesn't fit.
+const MIN_HEX_PX = 28;
+const MAX_ZOOM = 4;
+const isDesktopLayout = () => window.matchMedia('(min-width: 901px)').matches;
+
+function fitScale() {
+  const { w, h } = ui.boardSize;
+  const box = els.boardScroll;
+  if (isDesktopLayout()) return Math.min(box.clientWidth / w, box.clientHeight / h);
+  return box.clientWidth / w;
+}
+
+function sizeBoard(keepCenter = true) {
+  if (!ui.boardSize || !els.boardScroll) return;
+  const box = els.boardScroll;
+  const fit = fitScale();
+  if (!(fit > 0)) return;
+  if (ui.zoom === 'auto') ui.zoom = Math.min(MAX_ZOOM, Math.max(1, MIN_HEX_PX / (HEX * fit)));
+  // keep the point at the centre of the view in place while zooming
+  const cx = box.scrollWidth > box.clientWidth ? (box.scrollLeft + box.clientWidth / 2) / box.scrollWidth : 0.5;
+  const cy = box.scrollHeight > box.clientHeight ? (box.scrollTop + box.clientHeight / 2) / box.scrollHeight : 0.5;
+  const s = fit * ui.zoom;
+  els.board.style.width = `${Math.floor(ui.boardSize.w * s)}px`;
+  els.board.style.height = `${Math.floor(ui.boardSize.h * s)}px`;
+  if (keepCenter) {
+    box.scrollLeft = cx * box.scrollWidth - box.clientWidth / 2;
+    box.scrollTop = cy * box.scrollHeight - box.clientHeight / 2;
+  }
+  els.zoomFit.setAttribute('aria-pressed', String(ui.zoom <= 1.001));
+  els.zoomOut.disabled = ui.zoom <= 1.001;
+  els.zoomIn.disabled = ui.zoom >= MAX_ZOOM - 0.001;
+}
+
+function setZoom(z) {
+  ui.zoom = Math.min(MAX_ZOOM, Math.max(1, z));
+  sizeBoard(true);
+}
+
 function buildBoard() {
   const { cols, rows } = game.cfg;
   const w = PAD * 2 + SQRT3 * HEX * (cols + 0.5);
   const h = PAD * 2 + HEX * 2 + 1.5 * HEX * (rows - 1);
   els.board.setAttribute('viewBox', `0 0 ${w.toFixed(1)} ${h.toFixed(1)}`);
+  ui.boardSize = { w, h };
   els.board.innerHTML = '';
 
   const gTiles = svgEl('g');
@@ -1429,6 +1472,7 @@ function buildBoard() {
   els.borderGroup = svgEl('g', { class: 'district-borders' });
   els.badges = svgEl('g', { class: 'badges' });
   els.board.append(els.defs, gTiles, els.borderGroup, els.badges);
+  if (ui.zoom !== 'auto') sizeBoard(false);
 }
 
 // Inner hex size: area is proportional to population (largest tile = full size).
@@ -2029,6 +2073,12 @@ function bindEvents() {
   // The ambient loop comes back when results (or any dialog) close.
   els.dialog.addEventListener('close', () => Sound.resume());
   els.uncertaintyInfo.addEventListener('click', showUncertaintyInfo);
+  els.zoomIn.addEventListener('click', () => setZoom(ui.zoom * 1.25));
+  els.zoomOut.addEventListener('click', () => setZoom(ui.zoom / 1.25));
+  els.zoomFit.addEventListener('click', () => setZoom(1));
+  // Keep the map sized to its space when the window or the panels above it change.
+  if ('ResizeObserver' in window) new ResizeObserver(() => sizeBoard(true)).observe(els.boardScroll);
+  else window.addEventListener('resize', () => sizeBoard(true));
   els.stressToggle.addEventListener('click', () => {
     ui.stressOpen = els.uncertaintyBar.hidden;
     if (!ui.stressOpen) { ui.swing = 0; ui.turnoutGap = 0; }
@@ -2075,6 +2125,8 @@ function bindEvents() {
     if (Number.isInteger(num) && num >= 1 && num <= game.cfg.districts) setTool(num - 1);
     else if (e.key === '0' && game.cfg.districts >= 10) setTool(9);
     else if (e.key === 'e' || e.key === 'E') setTool('erase');
+    else if (e.key === '=' || e.key === '+') setZoom(ui.zoom * 1.25);
+    else if (e.key === '-' || e.key === '_') setZoom(ui.zoom / 1.25);
     else if (e.key === 'v' || e.key === 'V') {
       const order = ['votes', 'districts', 'results'];
       if (game.realistic) order.push('regions');
@@ -2417,6 +2469,10 @@ function revealSolution() {
 function init() {
   els.board = $('#board');
   els.boardArea = $('#board-area');
+  els.boardScroll = $('#board-scroll');
+  els.zoomIn = $('#zoom-in');
+  els.zoomOut = $('#zoom-out');
+  els.zoomFit = $('#zoom-fit');
   els.tooltip = $('#tooltip');
   els.size = $('#size-select');
   els.newMap = $('#new-map');

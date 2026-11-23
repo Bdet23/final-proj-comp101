@@ -915,3 +915,30 @@ body.start-open { overflow: hidden; }
   .layout { align-items: stretch; }
   .board-wrap, .sidebar { height: 100%; }
 }
+
+/* ---------- Map zoom ---------- */
+.board-scroll { overflow: auto; }
+#board { margin: 0 auto; flex: none; }
+.zoom-controls {
+  position: absolute;
+  top: 0.4rem;
+  right: 0.4rem;
+  z-index: 6;
+  display: inline-flex;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.15);
+  border-radius: 8px;
+}
+.zoom-controls button { padding: 0.2rem 0.6rem; font-size: 0.95rem; border-radius: 0; margin-left: -1px; background: var(--surface); }
+.zoom-controls button:first-child { border-radius: 8px 0 0 8px; margin-left: 0; }
+.zoom-controls button:last-child { border-radius: 0 8px 8px 0; }
+.zoom-controls button[aria-pressed="true"] { color: var(--accent); font-weight: 600; }
+.zoom-controls button:disabled { opacity: 0.4; cursor: default; }
+@media (min-width: 901px) {
+  .layout { grid-template-columns: minmax(0, 1fr) 290px; }
+  .board-scroll { position: absolute; inset: 0; display: flex; }
+  #board { margin: auto; }
+}
+@media (max-width: 900px) {
+  .board-scroll { max-height: 75vh; }
+}
+#board { max-height: none; min-height: 0; }

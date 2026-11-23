@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Gerrymander</title>
   <meta name="description" content="Draw district lines on a hex map so your candidate wins the most seats.">
-  <link rel="stylesheet" href="style.css?v=18">
+  <link rel="stylesheet" href="style.css?v=19">
 </head>
 <body>
   <header class="topbar">
@@ -156,7 +156,14 @@
       </div>
 
       <div class="board-area" id="board-area">
-        <svg id="board" role="img" aria-label="Hex map of the state"></svg>
+        <div class="board-scroll" id="board-scroll">
+          <svg id="board" role="img" aria-label="Hex map of the state"></svg>
+        </div>
+        <div class="zoom-controls" role="group" aria-label="Map zoom">
+          <button type="button" id="zoom-out" title="Zoom out (-)" aria-label="Zoom out">−</button>
+          <button type="button" id="zoom-fit" title="Fit the whole map">Fit</button>
+          <button type="button" id="zoom-in" title="Zoom in (=)" aria-label="Zoom in">+</button>
+        </div>
         <div id="tooltip" class="tooltip" role="status" hidden></div>
         <div id="loading" class="loading" hidden>Generating map…</div>
       </div>
@@ -187,7 +194,7 @@
           <li><strong>Real states:</strong> pick a state under "Real states" in the Map menu and choose a party. Each hex is a county, or part of a large county, with its real 2019 population estimate and 2020 presidential vote.</li>
           <li><strong>Campaign mode:</strong> draw a Realistic map, then play a decade. Each year brings an event with two choices, the state drifts, and every even year holds an election. Your score is the seats you win across the five elections.</li>
           <li><strong>Realistic mode:</strong> each election the state, its regions and each tile can swing a few points. Badges show each district's chance to win, and you need a 70% chance of winning the target number of seats.</li>
-          <li>Shortcuts: <kbd>1</kbd>–<kbd>8</kbd> pick a district, <kbd>E</kbd> eraser, <kbd>V</kbd> cycle colours, <kbd>L</kbd> cycle tile numbers.</li>
+          <li>Shortcuts: <kbd>1</kbd>–<kbd>8</kbd> pick a district, <kbd>E</kbd> eraser, <kbd>V</kbd> cycle colours, <kbd>L</kbd> cycle tile numbers, <kbd>=</kbd> / <kbd>-</kbd> zoom in and out (or use the −, Fit, + buttons on the map).</li>
         </ul>
       </details>
     </aside>
@@ -198,10 +205,10 @@
     <div class="dialog-actions" id="result-actions"></div>
   </dialog>
 
-  <script src="states.js?v=18"></script>
-  <script src="sound.js?v=18"></script>
-  <script src="game.js?v=18"></script>
-  <script src="campaign.js?v=18"></script>
-  <script src="start.js?v=18"></script>
+  <script src="states.js?v=19"></script>
+  <script src="sound.js?v=19"></script>
+  <script src="game.js?v=19"></script>
+  <script src="campaign.js?v=19"></script>
+  <script src="start.js?v=19"></script>
 </body>
 </html>
