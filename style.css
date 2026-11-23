@@ -990,3 +990,18 @@ body.start-open { overflow: hidden; }
 @media (prefers-reduced-motion: reduce) {
   .roll-marker, .roll-result, .tile.chg-up .hex, .tile.chg-down .hex, .tile.chg-other .hex { animation: none; }
 }
+
+/* ---------- Campaign stage 3 ---------- */
+.camp-decade { font-size: 0.82rem; font-weight: 500; color: var(--muted); margin-left: 0.3rem; }
+.camp-spark { display: inline-flex; align-items: center; gap: 0.3rem; font-size: 0.85rem; font-weight: 700; font-variant-numeric: tabular-nums; }
+.spark-ref { stroke: var(--muted); stroke-dasharray: 3 3; stroke-width: 1; opacity: 0.6; }
+.spark-line { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linejoin: round; }
+.spark-dot { fill: var(--accent); }
+.drift-line {
+  margin: -0.1rem 0 0.4rem; padding: 0.3rem 0.5rem; border-radius: 6px;
+  background: var(--surface-2); font-size: 0.85rem; font-variant-numeric: tabular-nums;
+}
+.chain-tag { text-transform: none; letter-spacing: 0; font-weight: 600; color: #7c5cbf; }
+.mid-redraw-row { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; margin: 0.3rem 0 0; }
+.camp-stats { align-items: center; }
+.spark-label { font-weight: 500; color: var(--muted); font-size: 0.8rem; }

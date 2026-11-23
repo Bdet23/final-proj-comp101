@@ -74,6 +74,14 @@ The **Change** colour view shows how far each hex has moved since the map was dr
 
 **Court challenges.** Each year a lawsuit may be filed. The risk (shown in the campaign header) rises with the map's efficiency gap in your favour, with districts that have drifted outside ±5% of equal population, and if you ignore a reform campaign. You can **defend** the map (⚑2, with a win chance shown) or **settle**. Losing or settling unlocks the map for a redraw: populations must be equal at today's numbers and the average Polsby–Popper compactness must reach 0.35 (settlement) or 0.40 plus an efficiency gap of at most 7% in your favour (court order). Submit the new map to continue the decade.
 
+**Decades and the census.** A campaign runs three decades (2021–2050). After each decade's last election comes a census: the state gains a seat if it grew faster than the nation (about 7% a decade, varying) or loses one if it grew slower, and you redraw the map at the new population numbers before the next decade starts. Your score is the total seats won across all fifteen elections.
+
+**Yearly drift.** Each new event card opens with what drifted over the past year (the districts that moved most, population growth and the change in win chance), and the header charts win chance year by year.
+
+**Event chains.** Some choices lead to follow-up events a year or two later, marked 🔗: an ignored reform campaign can put an initiative on the ballot that, if it passes, makes an independent commission set strict rules (compactness ≥ 0.45, efficiency gap ≤ 4%) for your next census map; a scandal you rode out can bring a primary challenger; a housing boom keeps growing; a promised jobs program comes due; a leaked donation prompts an ethics investigation.
+
+**Mid-decade redraw.** Once per decade you can redraw the whole map for ⚑3. It raises lawsuit risk by 15 points for the rest of that decade, and the year's event waits until you submit the new map.
+
 **Events.** Housing boom, factory closure, national wave, scandal, voting restrictions, retirement, donor offer, infrastructure project, ballot measure, severe storms, leader's gaffe, independent candidate, reform campaign and strong economy. No event repeats within three years.
 
 ## How maps are made

@@ -24,13 +24,32 @@
    ========================================================================== */
 
 const CAMPAIGN_FIRST_YEAR = 2021;
-const CAMPAIGN_LAST_YEAR = 2030;
+const DECADES = 3;                                   // 2021–2050
+const CAMPAIGN_LAST_YEAR = CAMPAIGN_FIRST_YEAR + 10 * DECADES - 1;
 const START_CAPITAL = 3;
-// Redraw rules: a court order is stricter than a settlement.
+const MID_REDRAW_COST = 3;      // capital for an optional mid-decade redraw
+const MID_REDRAW_RISK = 0.15;   // extra yearly lawsuit risk for the rest of that decade
+const NATIONAL_GROWTH = 0.07;   // typical US population growth per decade
+// Redraw rules: a court order is stricter than a settlement; an independent
+// commission is strictest. Census and mid-decade redraws only need legal districts.
 const REDRAW_RULES = {
   court: { label: 'Court-ordered redraw', pp: 0.4, eg: 0.07 },
   settle: { label: 'Settlement redraw', pp: 0.35, eg: null },
+  census: { label: 'Census redraw', pp: null, eg: null },
+  commission: { label: "Independent commission's map", pp: 0.45, eg: 0.04 },
+  mid: { label: 'Mid-decade redraw', pp: null, eg: null },
 };
+const decadeStart = (c) => CAMPAIGN_FIRST_YEAR + 10 * c.decade;
+const decadeEnd = (c) => decadeStart(c) + 9;
+// The year the current decade's map was drawn (baseline for the Change view).
+const campaignBaseYear = () => (game && game.campaign ? decadeStart(game.campaign) - 1 : CAMPAIGN_FIRST_YEAR - 1);
+const totalPop = () => game.tiles.reduce((s, t) => s + t.pop, 0);
+
+// Win chance and expected seats for the current map and state.
+function measure() {
+  const sim = simulatePlan(game, ui.assign);
+  return { win: sim.pTarget, seats: sim.expectedSeats };
+}
 
 const isElectionYear = (y) => y % 2 === 0;
 const clampLean = (x) => Math.max(3, Math.min(97, Math.round(x * 10) / 10));
@@ -94,6 +113,15 @@ function startDecade() {
     nextSwing: 0,                     // statewide shift at the next election (fraction)
     nextBonus: new Array(n).fill(0),  // per-district shift at the next election (fraction)
     reformPressure: 0,                // extra yearly lawsuit risk from a reform campaign
+    decade: 0,
+    decadeStartPop: totalPop(),
+    followUps: [],                    // chained events: { year, source, make(c) }
+    commission: false,                // a reform initiative passed: a commission sets the next census map's rules
+    midUsed: false,
+    midPenalty: 0,
+    history: [{ year: CAMPAIGN_FIRST_YEAR - 1, ...measure() }],
+    lastDrift: null,
+    censuses: [],                     // { year, growth, national, from, to }
     lastCourtYear: -99,
     courtCases: [],                   // { year, outcome }
     redraw: null,                     // { kind, pp, eg } while a redraw is in progress
@@ -192,7 +220,7 @@ function offBalanceDistricts() {
 function lawsuitRisk(c) {
   if (c.year - c.lastCourtYear < 3) return 0;
   const eg = Math.max(0, fairnessMetrics(currentStats()).efficiencyGap);
-  const risk = 0.04 + Math.max(0, eg - 0.05) * 1.5 + 0.05 * offBalanceDistricts() + c.reformPressure;
+  const risk = 0.04 + Math.max(0, eg - 0.05) * 1.5 + 0.05 * offBalanceDistricts() + c.reformPressure + c.midPenalty;
   return Math.min(0.6, risk);
 }
 
@@ -247,8 +275,10 @@ function redrawChecks(c) {
   const legal = stats.filter(isLegal).length;
   const checks = [
     { ok: assigned && legal === n, text: `Every district legal: connected, ${popRangeText()}`, value: `${legal} / ${n}` },
-    { ok: m.avgCompact >= c.redraw.pp, text: `Average compactness at least ${c.redraw.pp.toFixed(2)}`, value: m.avgCompact.toFixed(2) },
   ];
+  if (c.redraw.pp != null) {
+    checks.push({ ok: m.avgCompact >= c.redraw.pp, text: `Average compactness at least ${c.redraw.pp.toFixed(2)}`, value: m.avgCompact.toFixed(2) });
+  }
   if (c.redraw.eg != null) {
     checks.push({ ok: m.efficiencyGap <= c.redraw.eg, text: `Efficiency gap at most ${pctText(c.redraw.eg)} in your favour`,
       value: `${m.efficiencyGap >= 0 ? '' : '−'}${pctText(Math.abs(m.efficiencyGap))}` });
@@ -266,11 +296,96 @@ function submitRedraw() {
       <ul>${failing.map((x) => `<li>${x.text} (now ${x.value})</li>`).join('')}</ul>`, [{ label: 'Keep drawing', primary: true }]);
     return;
   }
-  c.log.unshift(`${c.year} · You submitted a new map (${REDRAW_RULES[c.redraw.kind].label.toLowerCase()}).`);
+  const kind = c.redraw.kind;
+  c.log.unshift(`${c.year} · You submitted a new map (${REDRAW_RULES[kind].label.toLowerCase()}).`);
   c.redraw = null;
   ui.tool = 'erase';
   Sound.play('legal');
+  if (kind === 'census' || kind === 'commission') {
+    startNextDecade(c);
+    return;
+  }
+  if (kind === 'mid') {
+    // Back to this year's event, with previews for the new map.
+    if (c.event) c.event.previews = c.event.choices.map((ch) => (ch.chance ? null : previewChoice(c, ch)));
+    render();
+    return;
+  }
   finishYear();
+}
+
+// ---------- Optional mid-decade redraw ----------
+function startMidRedraw() {
+  const c = game.campaign;
+  if (!c || c.midUsed || c.capital < MID_REDRAW_COST || !c.event || c.event.court) return;
+  c.capital -= MID_REDRAW_COST;
+  c.midUsed = true;
+  c.midPenalty += MID_REDRAW_RISK;
+  c.log.unshift(`${c.year} · You started a mid-decade redraw (−⚑${MID_REDRAW_COST}, lawsuit risk +${pctText(MID_REDRAW_RISK)}).`);
+  beginRedraw(c, 'mid');
+  Sound.play('event');
+  render();
+}
+
+// ---------- Census and the next decade ----------
+function runCensus(c) {
+  const n0 = game.cfg.districts;
+  const growth = totalPop() / c.decadeStartPop - 1;
+  const national = NATIONAL_GROWTH + (c.rand() - 0.5) * 0.04;
+  // The state's share of the nation's seats follows its share of the nation's growth.
+  const exact = n0 * (1 + growth) / (1 + national);
+  let n1 = n0;
+  if (exact - n0 >= 0.35) n1 = n0 + 1;
+  else if (n0 - exact >= 0.35) n1 = n0 - 1;
+  n1 = Math.max(2, Math.min(DISTRICT_COLORS.length, n1));
+  const year = decadeEnd(c);
+  c.year = year; // the census belongs to the decade's last year; the next decade starts after the redraw
+  c.censuses.push({ year, growth, national, from: n0, to: n1 });
+  if (n1 !== n0) {
+    game.cfg.districts = n1;
+    game.target = Math.max(1, Math.round((game.target * n1) / n0));
+    ui.assign = ui.assign.map((d) => (d >= n1 ? -1 : d));
+    c.nextBonus = new Array(n1).fill(0);
+    buildDistrictList();
+  }
+  c.event = null;
+  beginRedraw(c, c.commission ? 'commission' : 'census');
+  const seatText = n1 > n0 ? `The state <strong>gains a seat</strong>: ${n0} → ${n1} districts.`
+    : n1 < n0 ? `The state <strong>loses a seat</strong>: ${n0} → ${n1} districts.`
+      : `The state keeps its <strong>${n1} seats</strong>.`;
+  const rules = c.commission
+    ? `Because the reform initiative passed, the new map must meet an independent commission's rules:
+       average compactness of at least ${REDRAW_RULES.commission.pp.toFixed(2)} and an efficiency gap of at most ${pctText(REDRAW_RULES.commission.eg)} in your favour.`
+    : 'Redraw the map so every district is legal at the new population numbers.';
+  openDialog(`
+    <h2>The ${year} census</h2>
+    <p>The state grew <strong>${(growth * 100).toFixed(1)}%</strong> this decade, against ${(national * 100).toFixed(1)}% nationally. ${seatText}
+       Your target is now ${game.target} of ${n1} seats.</p>
+    <p>${rules}</p>
+    <p class="small muted">Your current districts are kept as a starting point; populations must be equal at today's numbers
+       (${fmtInt(game.ideal)} people per district).</p>`,
+  [{ label: 'Draw the new map', primary: true }]);
+  Sound.play('event');
+  render();
+}
+
+function startNextDecade(c) {
+  c.decade++;
+  c.year = decadeStart(c);
+  c.base = game.tiles.map((t) => ({ pop: t.pop, lean: t.lean, turnout: t.turnout }));
+  c.decadeStartPop = totalPop();
+  c.lastCourtYear = -99;
+  c.reformPressure = 0;
+  c.midUsed = false;
+  c.midPenalty = 0;
+  c.commission = false;
+  c.recent = [];
+  c.followUps = [];
+  c.lastDrift = null;
+  c.history = [{ year: c.year - 1, ...measure() }];
+  c.event = drawEvent(c);
+  Sound.play('event');
+  render();
 }
 
 // ---------- Events ----------
@@ -287,9 +402,9 @@ const EVENT_TYPES = {
       tiles: ids,
       choices: [
         { label: 'Register the newcomers', cost: 1, detail: 'Turnout in those hexes rises 5%.',
-          apply: () => { changeTiles(ids, { pop: 0.08, lean: 3 * dir, turnout: 0.05 }); return 'you ran a registration drive.'; } },
+          apply: (preview) => { changeTiles(ids, { pop: 0.08, lean: 3 * dir, turnout: 0.05 }); if (!preview) followUp(c, 2, `Housing boom near ${placeName(center)}`, (cc) => CHAINS.suburb(cc, center, ids, dir)); return 'you ran a registration drive.'; } },
         { label: 'Leave it alone', detail: 'Newcomers are slow to register: turnout there falls 4%.',
-          apply: () => { changeTiles(ids, { pop: 0.08, lean: 3 * dir, turnout: -0.04 }); return 'you left the newcomers alone.'; } },
+          apply: (preview) => { changeTiles(ids, { pop: 0.08, lean: 3 * dir, turnout: -0.04 }); if (!preview) followUp(c, 2, `Housing boom near ${placeName(center)}`, (cc) => CHAINS.suburb(cc, center, ids, dir)); return 'you left the newcomers alone.'; } },
       ],
     };
   },
@@ -302,8 +417,8 @@ const EVENT_TYPES = {
       text: `A major plant is closing. ${ids.length} hexes around ${placeName(center)} lose about 6% of their people, and anger over the closure pushes them ${ptsWord(4)} toward ${dir > 0 ? youSide() : oppSide()}.`,
       tiles: ids,
       choices: [
-        { label: 'Promise a jobs program', cost: 1, detail: 'Halves the shift there.',
-          apply: () => { changeTiles(ids, { pop: -0.06, lean: 2 * dir }); return 'you promised a jobs program.'; } },
+        { label: 'Promise a jobs program', cost: 1, detail: 'Halves the shift there. The promise comes due in two years.',
+          apply: (preview) => { changeTiles(ids, { pop: -0.06, lean: 2 * dir }); if (!preview) followUp(c, 2, `Factory closes near ${placeName(center)}`, (cc) => CHAINS.jobs(cc, center, ids)); return 'you promised a jobs program.'; } },
         { label: 'Keep your focus elsewhere', detail: 'The full shift happens.',
           apply: () => { changeTiles(ids, { pop: -0.06, lean: 4 * dir }); return 'you kept your focus elsewhere.'; } },
       ],
@@ -340,8 +455,8 @@ const EVENT_TYPES = {
       choices: [
         { label: 'Replace the candidate', cost: 1, detail: 'No scandal penalty, but the new candidate is less known: −1.5 points there for the rest of the decade.',
           apply: () => { changeTiles(ids, { lean: -1.5 }); return `you replaced the District ${d + 1} candidate.`; } },
-        { label: 'Ride it out', detail: '−5 points there at the next election only.',
-          apply: () => { c.nextBonus[d] -= 0.05; return `you rode out the District ${d + 1} scandal.`; } },
+        { label: 'Ride it out', detail: '−5 points there at the next election only. A primary challenger may follow.',
+          apply: (preview) => { c.nextBonus[d] -= 0.05; if (!preview) followUp(c, 1, `Scandal in District ${d + 1}`, (cc) => CHAINS.primary(cc, d)); return `you rode out the District ${d + 1} scandal.`; } },
       ],
     };
   },
@@ -403,6 +518,7 @@ const EVENT_TYPES = {
               const d = pick(mine, c.rand);
               c.nextBonus[d] -= 0.03;
               r.label = `The donation leaked: −3 points in District ${d + 1} at the next election.`;
+              followUp(c, 1, 'A wealthy donor offers support', (cc) => CHAINS.ethics(cc));
               return { text: `you took the donation, and it leaked in District ${d + 1}.`, roll: r };
             }
             return { text: 'you took the donation quietly.', roll: r };
@@ -495,8 +611,8 @@ const EVENT_TYPES = {
       choices: [
         { label: 'Fight the campaign', cost: 2, detail: 'No change in lawsuit risk.',
           apply: () => 'you fought the reform campaign.' },
-        { label: 'Ignore it', detail: 'Lawsuit risk rises by 10 percentage points for the rest of the decade.',
-          apply: () => { c.reformPressure += 0.1; return 'you ignored the reform campaign.'; } },
+        { label: 'Ignore it', detail: 'Lawsuit risk rises by 10 percentage points for the rest of the decade, and the reformers may reach the ballot.',
+          apply: (preview) => { c.reformPressure += 0.1; if (!preview) followUp(c, 1, 'Redistricting reform campaign', (cc) => CHAINS.initiative(cc)); return 'you ignored the reform campaign.'; } },
       ],
     };
   },
@@ -515,6 +631,103 @@ const EVENT_TYPES = {
   },
 };
 
+// ---------- Event chains ----------
+// A follow-up event, due a few years later (only within the current decade).
+function followUp(c, years, source, make) {
+  const year = c.year + years;
+  if (year <= decadeEnd(c)) c.followUps.push({ year, source, make });
+}
+
+const CHAINS = {
+  suburb(c, center, ids, dir) {
+    return {
+      title: `The new suburb near ${placeName(center)} keeps growing`,
+      text: `The boom is still drawing people: these hexes could grow another 6% and shift ${ptsWord(2)} more toward ${dir > 0 ? youSide() : oppSide()}.`,
+      tiles: ids,
+      choices: [
+        { label: 'Encourage more building', detail: '+6% population there and the full shift.',
+          apply: () => { changeTiles(ids, { pop: 0.06, lean: 2 * dir }); return 'you encouraged more building.'; } },
+        { label: 'Slow the growth', cost: 1, detail: '+2% population there and half the shift.',
+          apply: () => { changeTiles(ids, { pop: 0.02, lean: 1 * dir }); return 'you slowed the growth.'; } },
+      ],
+    };
+  },
+  jobs(c, center, ids) {
+    return {
+      title: `Your jobs-program promise near ${placeName(center)} comes due`,
+      text: 'Voters near the closed plant want the jobs program you promised.',
+      tiles: ids,
+      choices: [
+        { label: 'Deliver it', cost: 2, detail: '+2 points in those hexes for the decade.',
+          apply: () => { changeTiles(ids, { lean: 2 }); return 'you delivered the jobs program.'; } },
+        { label: 'Break the promise', detail: '−3 points in those hexes for the decade.',
+          apply: () => { changeTiles(ids, { lean: -3 }); return 'you broke the jobs promise.'; } },
+      ],
+    };
+  },
+  primary(c, d) {
+    if (d >= game.cfg.districts) return null;
+    const ids = currentStats()[d].tiles;
+    return {
+      title: `A primary challenger takes on District ${d + 1}`,
+      text: `After last year's scandal, a rival from your own party is challenging the District ${d + 1} incumbent.`,
+      tiles: ids,
+      choices: [
+        { label: 'Back the incumbent', cost: 1, detail: 'The incumbent survives; no change.',
+          apply: () => `you backed the District ${d + 1} incumbent.` },
+        { label: 'Let the primary decide', chance: true, detail: 'A 50% chance the challenger wins and is a weaker nominee: −2 points there for the decade.',
+          apply: (preview) => {
+            if (preview) return '';
+            const r = roll(c, 0.5, 'The incumbent survived the primary.', `The challenger won: −2 points in District ${d + 1}.`);
+            if (!r.ok) changeTiles(ids, { lean: -2 });
+            return { text: r.ok ? 'the incumbent survived the primary.' : `the challenger won the District ${d + 1} primary.`, roll: r };
+          } },
+      ],
+    };
+  },
+  ethics(c) {
+    return {
+      title: 'An ethics investigation into the donation',
+      text: 'The leaked donation has prompted an ethics investigation into your party.',
+      tiles: [],
+      choices: [
+        { label: 'Cooperate fully', cost: 1, detail: 'The story fades; no change.',
+          apply: () => 'you cooperated with the investigation.' },
+        { label: 'Stonewall', chance: true, detail: 'A 60% chance it fades; otherwise −2 points statewide at the next election.',
+          apply: (preview) => {
+            if (preview) return '';
+            const r = roll(c, 0.6, 'The investigation fizzled out.', 'The investigation dragged on: −2 points statewide at the next election.');
+            if (!r.ok) c.nextSwing -= 0.02;
+            return { text: r.ok ? 'you stonewalled and the story faded.' : 'you stonewalled and the story grew.', roll: r };
+          } },
+      ],
+    };
+  },
+  initiative(c) {
+    return {
+      title: 'A reform initiative is on the ballot',
+      text: 'The reformers gathered enough signatures. If the initiative passes, an independent commission will set strict rules for the map you draw after the census.',
+      tiles: [],
+      choices: [
+        { label: 'Campaign against it', cost: 2, chance: true, detail: 'A 65% chance it is defeated.',
+          apply: (preview) => {
+            if (preview) return '';
+            const r = roll(c, 0.65, 'The initiative was defeated.', 'The initiative passed: a commission will set the rules for your next census map.');
+            if (!r.ok) c.commission = true;
+            return { text: r.ok ? 'you defeated the reform initiative.' : 'the reform initiative passed despite your campaign.', roll: r };
+          } },
+        { label: 'Let voters decide', chance: true, detail: 'A 30% chance it is defeated.',
+          apply: (preview) => {
+            if (preview) return '';
+            const r = roll(c, 0.3, 'Voters rejected the initiative.', 'The initiative passed: a commission will set the rules for your next census map.');
+            if (!r.ok) c.commission = true;
+            return { text: r.ok ? 'voters rejected the reform initiative.' : 'the reform initiative passed.', roll: r };
+          } },
+      ],
+    };
+  },
+};
+
 function drawEvent(c) {
   // A lawsuit can replace the year's event.
   if (c.rand() < lawsuitRisk(c)) {
@@ -522,6 +735,18 @@ function drawEvent(c) {
     const ev = courtEvent(c);
     ev.previews = ev.choices.map(() => null);
     return ev;
+  }
+  // A chained follow-up that is due comes before a random event.
+  const due = c.followUps.findIndex((f) => f.year <= c.year);
+  if (due >= 0) {
+    const f = c.followUps.splice(due, 1)[0];
+    const ev = f.make(c);
+    if (ev) {
+      ev.type = 'chain';
+      ev.chain = f.source;
+      ev.previews = ev.choices.map((ch) => (ch.chance ? null : previewChoice(c, ch)));
+      return ev;
+    }
   }
   const types = Object.keys(EVENT_TYPES).filter((k) => !c.recent.includes(k));
   for (let k = 0; k < 30; k++) {
@@ -549,6 +774,8 @@ function previewChoice(c, choice) {
   const snapSwing = c.nextSwing;
   const snapBonus = c.nextBonus.slice();
   const snapReform = c.reformPressure;
+  const snapFollow = c.followUps.slice();
+  const snapCommission = c.commission;
   const before = expectedShares(c);
   choice.apply(true);
   const after = expectedShares(c);
@@ -556,6 +783,8 @@ function previewChoice(c, choice) {
   c.nextSwing = snapSwing;
   c.nextBonus = snapBonus;
   c.reformPressure = snapReform;
+  c.followUps = snapFollow;
+  c.commission = snapCommission;
   return after.map((a, d) => ({ d, delta: a - before[d] }))
     .filter((x) => Math.abs(x.delta) >= 0.0005)
     .sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta));
@@ -646,8 +875,22 @@ function outcomeDistrictDelta(d) {
 
 function finishYear() {
   const c = game.campaign;
+  const beforeShares = currentStats().map((s) => s.share);
+  const beforePop = totalPop();
+  const beforeM = measure();
   driftYear(c);
   buildBoard();
+  const afterM = measure();
+  c.history.push({ year: c.year, ...afterM });
+  c.lastDrift = {
+    year: c.year,
+    districts: currentStats().map((s, d) => ({ d, delta: s.share - beforeShares[d] }))
+      .filter((x) => Math.abs(x.delta) >= 0.001)
+      .sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta)),
+    pop: totalPop() / beforePop - 1,
+    winBefore: beforeM.win,
+    winAfter: afterM.win,
+  };
   if (isElectionYear(c.year)) {
     const result = campaignElection(c);
     render();
@@ -660,10 +903,14 @@ function finishYear() {
 function nextCampaignYear() {
   const c = game.campaign;
   c.year++;
-  if (c.year > CAMPAIGN_LAST_YEAR) {
-    c.over = true;
-    render();
-    showDecadeSummary();
+  if (c.year > decadeEnd(c)) {
+    if (c.decade + 1 >= DECADES) {
+      c.over = true;
+      render();
+      showDecadeSummary();
+      return;
+    }
+    runCensus(c);
     return;
   }
   c.event = drawEvent(c);
@@ -695,7 +942,7 @@ function campaignElection(c) {
   const earned = reached ? 2 : 1;
   c.capital += earned;
   const result = {
-    year: c.year, seats, shares, reached, earned,
+    year: c.year, seats, shares, reached, earned, target: game.target, districts: n, decade: c.decade,
     swing: unc.state[s] + c.nextSwing,
     turnout: unc.tState ? unc.tState[s] : 0,
   };
@@ -706,7 +953,8 @@ function campaignElection(c) {
 }
 
 function showCampaignElection(r) {
-  const n = game.cfg.districts;
+  const c = game.campaign;
+  const n = r.shares.length;
   Sound.election(r.reached);
   const rows = r.shares.map((x, d) => `
     <tr>
@@ -718,15 +966,17 @@ function showCampaignElection(r) {
   const dir = r.swing >= 0 ? `toward ${youSide()}` : `toward ${oppSide()}`;
   const tPct = Math.round(Math.abs(r.turnout * 100));
   const turnoutText = tPct === 0 ? 'about the same as usual' : `${tPct}% ${r.turnout >= 0 ? 'above' : 'below'} usual`;
+  const label = r.year >= CAMPAIGN_LAST_YEAR ? 'See the campaign results'
+    : r.year >= decadeEnd(c) ? `Go to the ${r.year} census` : `Continue to ${r.year + 1}`;
   openDialog(`
     <h2>${r.year} election: ${r.reached ? 'target reached' : 'short of target'}</h2>
-    <p>You won <strong>${r.seats} of ${n}</strong> seats (target ${game.target}). The state swung ${swing} points ${dir},
+    <p>You won <strong>${r.seats} of ${n}</strong> seats (target ${r.target}). The state swung ${swing} points ${dir},
        and turnout was ${turnoutText}. You earned <strong>⚑${r.earned}</strong> political capital.</p>
     <table class="results-table">
       <thead><tr><th>District</th><th class="num">Your vote</th><th>Winner</th></tr></thead>
       <tbody>${rows}</tbody>
     </table>`,
-  [{ label: r.year >= CAMPAIGN_LAST_YEAR ? 'See the decade' : `Continue to ${r.year + 1}`, primary: true, onClick: nextCampaignYear }]);
+  [{ label, primary: true, onClick: nextCampaignYear }]);
 }
 
 function campaignScore(c) {
@@ -738,29 +988,36 @@ function campaignScore(c) {
 
 function showDecadeSummary() {
   const c = game.campaign;
-  const n = game.cfg.districts;
   const sc = campaignScore(c);
-  const bars = c.elections.map((e) => `
-    <div class="hist-row">
-      <span class="hist-label">${e.year}</span>
-      <span class="hist-track"><span class="hist-bar ${e.reached ? 'enough' : ''}" style="width:${(e.seats / n) * 100}%"></span></span>
-      <span class="hist-val">${e.seats} of ${n}</span>
-    </div>`).join('');
-  const verdict = sc.reached === c.elections.length ? 'Your map held all decade.'
-    : sc.reached === 0 ? 'Your map never reached its target.'
-      : `Your map reached its target in ${sc.reached} of ${c.elections.length} elections.`;
+  const decades = [];
+  for (let k = 0; k < DECADES; k++) {
+    const list = c.elections.filter((e) => e.decade === k);
+    if (!list.length) continue;
+    const y0 = CAMPAIGN_FIRST_YEAR + 10 * k;
+    decades.push(`<h3 class="dialog-sub">${y0}–${y0 + 9}</h3><div class="histogram">${list.map((e) => `
+      <div class="hist-row">
+        <span class="hist-label">${e.year}</span>
+        <span class="hist-track"><span class="hist-bar ${e.reached ? 'enough' : ''}" style="width:${(e.seats / e.districts) * 100}%"></span></span>
+        <span class="hist-val">${e.seats} of ${e.districts}</span>
+      </div>`).join('')}</div>`);
+  }
+  const verdict = sc.reached === c.elections.length ? 'Your maps held for the whole campaign.'
+    : sc.reached === 0 ? 'Your maps never reached their target.'
+      : `Your maps reached their target in ${sc.reached} of ${c.elections.length} elections.`;
   const cases = c.courtCases.length
     ? c.courtCases.map((x) => `${x.year}: ${x.outcome === 'won' ? 'won in court' : x.outcome === 'lost' ? 'lost in court and redrew' : 'settled and redrew'}`).join('; ')
     : 'none';
+  const censuses = c.censuses.length
+    ? c.censuses.map((x) => `${x.year}: ${x.from === x.to ? `kept ${x.to} seats` : `${x.from} → ${x.to} seats`} (grew ${(x.growth * 100).toFixed(1)}%)`).join('; ')
+    : 'none';
   openDialog(`
-    <h2>Decade complete</h2>
-    <p>${verdict} You won <strong>${sc.seats} seats</strong> across ${c.elections.length} elections
-       (out of ${n * c.elections.length} possible; target ${game.target} per election), and finished with ⚑${c.capital} capital.</p>
-    <h3 class="dialog-sub">Seats won per election</h3>
-    <div class="histogram">${bars}</div>
-    <p class="small">Court cases: ${cases}.</p>
-    <p class="small muted">Over the decade, suburbs trended ${trendWord(c.typeTrend.suburban)}, rural areas ${trendWord(c.typeTrend.rural)}
-       and cities ${trendWord(c.typeTrend.urban)}. Use the <strong>Change</strong> colour view to see where your map was eroded.</p>`,
+    <h2>Campaign complete</h2>
+    <p>${verdict} You won <strong>${sc.seats} seats</strong> across ${c.elections.length} elections over ${DECADES} decades,
+       and finished with ⚑${c.capital} capital.</p>
+    ${decades.join('')}
+    <p class="small">Censuses: ${censuses}.<br>Court cases: ${cases}.</p>
+    <p class="small muted">Suburbs trended ${trendWord(c.typeTrend.suburban)} per decade, rural areas ${trendWord(c.typeTrend.rural)}
+       and cities ${trendWord(c.typeTrend.urban)}.</p>`,
   [{ label: 'Look at the map' }, { label: 'New campaign', primary: true, onClick: () => startGame(els.size.value, randomSeed()) }]);
 }
 
@@ -770,6 +1027,38 @@ function trendWord(x) {
 }
 
 // ---------- Panel ----------
+// "Over 2023: D3 ▼0.6 · D5 ▲0.4 · population +0.6% · win chance 83% → 80%"
+function driftLine(c) {
+  const dr = c.lastDrift;
+  if (!dr || dr.year !== c.year - 1) return '';
+  const parts = dr.districts.slice(0, 4).map((x) =>
+    `<span class="${x.delta > 0 ? 'ok' : 'bad'}">D${x.d + 1} ${x.delta > 0 ? '▲' : '▼'}${Math.abs(x.delta * 100).toFixed(1)}</span>`);
+  if (!parts.length) parts.push('<span class="muted">little change in your districts</span>');
+  const win = `win chance ${fmtChance(dr.winBefore)} → <strong class="${dr.winAfter >= dr.winBefore ? 'ok' : 'bad'}">${fmtChance(dr.winAfter)}</strong>`;
+  return `<p class="drift-line" title="Yearly drift: population growth and gradual partisan trends">📈 Over ${dr.year}: ${parts.join(' · ')}
+    · population ${dr.pop >= 0 ? '+' : '−'}${Math.abs(dr.pop * 100).toFixed(1)}% · ${win}</p>`;
+}
+
+// A small chart of win chance by year this decade, with the 70% line.
+function sparkline(c) {
+  const h = c.history;
+  if (h.length < 2) return '';
+  const w = 150;
+  const ht = 30;
+  const x = (i) => 4 + (i / 10) * (w - 8);
+  const y = (v) => 3 + (1 - v) * (ht - 6);
+  const pts = h.map((p, i) => `${x(i).toFixed(1)},${y(p.win).toFixed(1)}`).join(' ');
+  const last = h.at(-1);
+  return `<span class="camp-spark" title="Win chance by year this decade (dashed line: 70%)">
+    <span class="spark-label">Win chance</span>
+    <svg width="${w}" height="${ht}" viewBox="0 0 ${w} ${ht}" aria-hidden="true">
+      <line x1="4" x2="${w - 4}" y1="${y(PASS_PROBABILITY)}" y2="${y(PASS_PROBABILITY)}" class="spark-ref"/>
+      <polyline points="${pts}" class="spark-line"/>
+      <circle cx="${x(h.length - 1)}" cy="${y(last.win)}" r="2.5" class="spark-dot"/>
+    </svg>
+    <span class="spark-val ${last.win >= PASS_PROBABILITY ? 'ok' : 'bad'}">${fmtChance(last.win)}</span>
+  </span>`;
+}
 function renderCampaign() {
   const show = !!game.campaignMode;
   els.campaign.hidden = !show;
@@ -777,7 +1066,8 @@ function renderCampaign() {
   const c = game.campaign;
   const n = game.cfg.districts;
   const years = [];
-  for (let y = CAMPAIGN_FIRST_YEAR; y <= CAMPAIGN_LAST_YEAR; y++) years.push(y);
+  const y0 = c ? decadeStart(c) : CAMPAIGN_FIRST_YEAR;
+  for (let y = y0; y <= y0 + 9; y++) years.push(y);
   const timeline = years.map((y) => {
     const e = c && c.elections.find((x) => x.year === y);
     const court = c && c.courtCases.find((x) => x.year === y);
@@ -791,14 +1081,15 @@ function renderCampaign() {
 
   let body;
   if (!c) {
-    body = `<p class="camp-lead">Draw a legal map, then play the decade <strong>${CAMPAIGN_FIRST_YEAR}–${CAMPAIGN_LAST_YEAR}</strong>.
+    body = `<p class="camp-lead">Draw a legal map, then play <strong>${DECADES} decades, ${CAMPAIGN_FIRST_YEAR}–${CAMPAIGN_LAST_YEAR}</strong>.
       Each year brings an event; populations, leanings and turnout drift; every even year holds an election.
+      After each decade's census the state may gain or lose a seat, and you redraw the map.
       You start with <strong>⚑${START_CAPITAL}</strong> political capital to spend on choices and earn more at each election.
       An extreme or unbalanced map can be challenged in court. Your score is the total seats you win.</p>
       <button type="button" class="primary" id="start-decade">Start the decade</button>`;
   } else if (c.over) {
     const sc = campaignScore(c);
-    body = `<p class="camp-lead"><strong>Decade complete.</strong> ${sc.seats} seats won; target reached in ${sc.reached} of ${c.elections.length} elections.</p>
+    body = `<p class="camp-lead"><strong>Campaign complete.</strong> ${sc.seats} seats won; target reached in ${sc.reached} of ${c.elections.length} elections.</p>
       <button type="button" class="primary" id="new-campaign">New campaign</button>`;
   } else if (c.outcome) {
     const o = c.outcome;
@@ -849,9 +1140,9 @@ function renderCampaign() {
     body = `
       <div class="event-card redraw-card">
         <p class="event-year">${c.year} · ${REDRAW_RULES[c.redraw.kind].label}</p>
-        <h3>Redraw the map</h3>
-        <p>The map is unlocked. Populations must now be equal at today's numbers (ideal ${fmtInt(game.ideal)} people per district).
-           Repaint the districts to meet every rule, then submit.</p>
+        <h3>${{ census: `Draw the map for ${c.year + 1}–${c.year + 10}`, commission: `Draw the map for ${c.year + 1}–${c.year + 10} under commission rules`, mid: 'Redraw the map mid-decade' }[c.redraw.kind] || 'Redraw the map'}</h3>
+        <p>The map is unlocked. Populations must be equal at today's numbers (ideal ${fmtInt(game.ideal)} people per district${game.cfg.districts !== (c.elections.at(-1) || {}).districts && c.elections.length ? `, now ${game.cfg.districts} districts` : ''}).
+           Repaint the districts to meet every rule, then submit.${c.redraw.kind === 'mid' ? " This year's event waits until you finish." : ''}</p>
         <ul class="checklist redraw-checks">${checks.map((x) => `
           <li class="${x.ok ? 'done' : ''}"><span class="check" aria-hidden="true">${x.ok ? '✓' : ''}</span>
             <span class="c-text">${x.text}</span><span class="c-count">${x.value}</span></li>`).join('')}</ul>
@@ -883,10 +1174,14 @@ function renderCampaign() {
     }).join('');
     body = `
       <div class="event-card ${ev.court ? 'court-card' : ''}">
-        <p class="event-year">${c.year}${isElectionYear(c.year) ? ' · election at year end' : ''}</p>
+        ${driftLine(c)}
+        <p class="event-year">${c.year}${isElectionYear(c.year) ? ' · election at year end' : ''}${ev.chain ? ` · <span class="chain-tag">🔗 follow-up: ${ev.chain}</span>` : ''}</p>
         <h3>${ev.court ? '⚖ ' : ''}${ev.title}</h3>
         <p>${ev.text}</p>
         <div class="choices">${choices}</div>
+        ${!ev.court && !c.midUsed ? `<p class="mid-redraw-row"><button type="button" class="secondary small-btn" id="mid-redraw" ${c.capital < MID_REDRAW_COST ? 'disabled' : ''}
+          title="Redraw the whole map now, once per decade">Redraw mid-decade (⚑${MID_REDRAW_COST})</button>
+          <span class="small muted">Once per decade; lawsuit risk +${pctText(MID_REDRAW_RISK)} for the rest of it.</span></p>` : ''}
         <p class="small muted">Effects show the change in each district's expected vote share at the ${nextElection} election.</p>
       </div>
       ${mods.length ? `<p class="small">Next election (${nextElection}): ${mods.join(', ')}.</p>` : ''}`;
@@ -895,8 +1190,10 @@ function renderCampaign() {
   const risk = c && !c.over && !c.redraw ? lawsuitRisk(c) : null;
   els.campaign.innerHTML = `
     <div class="camp-head">
-      <h2>Campaign</h2>
+      <h2>Campaign${c ? ` <span class="camp-decade">decade ${c.decade + 1} of ${DECADES} · ${decadeStart(c)}–${decadeEnd(c)}</span>` : ''}</h2>
       ${c ? `<span class="camp-stats">
+        ${sparkline(c)}
+        ${c.commission ? '<span class="camp-stat bad" title="A reform initiative passed: an independent commission sets the rules for your next census map">🏛 Commission next census</span>' : ''}
         <span class="camp-stat" title="Political capital: spend it on choices, earn it at elections">⚑ <strong>${c.capital}</strong> capital</span>
         ${risk != null ? `<span class="camp-stat ${risk >= 0.25 ? 'bad' : ''}" title="Chance of a lawsuit next year: rises with your efficiency gap and districts out of population balance">⚖ ${pctText(risk)} lawsuit risk</span>` : ''}
         <span class="camp-stat">${sc.seats} seats won · target ${sc.reached}/${c.elections.length}</span>
@@ -908,6 +1205,8 @@ function renderCampaign() {
 
   const start = els.campaign.querySelector('#start-decade');
   if (start) start.addEventListener('click', startDecade);
+  const mid = els.campaign.querySelector('#mid-redraw');
+  if (mid) mid.addEventListener('click', startMidRedraw);
   const again = els.campaign.querySelector('#new-campaign');
   if (again) again.addEventListener('click', () => startGame(els.size.value, randomSeed()));
   const cont = els.campaign.querySelector('#outcome-continue');

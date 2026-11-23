@@ -1359,7 +1359,7 @@ function renderLegend() {
   if (ui.view === 'change') {
     els.legend.innerHTML = `<span>Moved toward ${oppName().toLowerCase() === 'opponent' ? 'opponent' : 'the ' + oppName()}</span>${bar}
       <span>Moved toward ${game.party ? 'the ' + youName() : 'you'}</span>
-      <span class="legend-note">Change in vote share since ${CAMPAIGN_FIRST_YEAR - 1}, in points (full colour at 5).</span>`;
+      <span class="legend-note">Change in vote share since ${campaignBaseYear()}, in points (full colour at 5).</span>`;
     return;
   }
   if (ui.view === 'turnout') {
@@ -1662,7 +1662,7 @@ function showTooltip(id, e) {
     const b = game.campaign.base[t.id];
     const dl = t.lean - b.lean;
     const dp = t.pop / b.pop - 1;
-    body += `<br>Since ${CAMPAIGN_FIRST_YEAR - 1}: ${dl >= 0 ? '+' : '−'}${Math.abs(dl).toFixed(1)} pts for you, population ${dp >= 0 ? '+' : '−'}${Math.abs(dp * 100).toFixed(1)}%`;
+    body += `<br>Since ${campaignBaseYear()}: ${dl >= 0 ? '+' : '−'}${Math.abs(dl).toFixed(1)} pts for you, population ${dp >= 0 ? '+' : '−'}${Math.abs(dp * 100).toFixed(1)}%`;
   }
   const title = d >= 0
     ? `<span class="tt-dot" style="background:${DISTRICT_COLORS[d]}"></span>District ${d + 1}`
