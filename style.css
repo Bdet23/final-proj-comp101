@@ -958,3 +958,35 @@ body.start-open { overflow: hidden; }
 .redraw-checks { display: flex; flex-direction: column; gap: 0.3rem; margin: 0.4rem 0 0.6rem; }
 .redraw-checks li { display: grid; grid-template-columns: 20px minmax(0, 1fr) auto; gap: 0.5rem; align-items: center; font-size: 0.92rem; }
 #submit-redraw[aria-disabled="true"] { opacity: 0.6; }
+
+/* ---------- Campaign outcomes ---------- */
+.outcome-card { border-color: var(--accent); }
+.outcome-lines, .outcome-districts { margin: 0.35rem 0; padding-left: 1.1rem; font-size: 0.92rem; }
+.outcome-lines li, .outcome-districts li { margin: 0.15rem 0; }
+.outcome-districts { list-style: none; padding-left: 0; display: flex; flex-wrap: wrap; gap: 0.2rem 1rem; }
+.outcome-districts .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 0.25rem; }
+.outcome-sub { margin: 0.4rem 0 0; }
+.outcome-card .primary { margin-top: 0.4rem; }
+.roll { margin: 0.5rem 0; padding: 0.5rem 0.7rem; border-radius: 8px; background: var(--surface-2); border: 1px solid var(--border); }
+.roll-head { font-size: 0.85rem; font-weight: 600; color: var(--muted); margin-bottom: 0.35rem; }
+.roll-bar { position: relative; height: 14px; border-radius: 7px; background: color-mix(in srgb, var(--bad) 25%, var(--surface)); overflow: visible; }
+.roll-zone { position: absolute; inset: 0 auto 0 0; border-radius: 7px 0 0 7px; background: color-mix(in srgb, var(--good) 40%, var(--surface)); }
+.roll-marker {
+  position: absolute; top: -5px; bottom: -5px; width: 4px; margin-left: -2px; border-radius: 2px;
+  background: var(--text); left: var(--at);
+  animation: roll-slide 0.9s cubic-bezier(.2, .8, .3, 1) both;
+}
+@keyframes roll-slide { 0% { left: 0; } 60% { left: 100%; } 100% { left: var(--at); } }
+.roll-result { margin: 0.4rem 0 0; font-weight: 700; animation: roll-reveal 0.3s ease 0.9s both; }
+.roll-ok .roll-result { color: var(--good); }
+.roll-bad .roll-result { color: var(--bad); }
+@keyframes roll-reveal { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: none; } }
+.tile.chg-up .hex, .tile.chg-down .hex, .tile.chg-other .hex { stroke-width: 4; animation: chg-pulse 1.1s ease-in-out 3; }
+.tile.chg-up .hex { stroke: var(--good); }
+.tile.chg-down .hex { stroke: var(--bad); }
+.tile.chg-other .hex { stroke: #7c5cbf; }
+@keyframes chg-pulse { 50% { stroke-width: 7; } }
+.chg-chip { font-weight: 700; font-size: 0.72rem; }
+@media (prefers-reduced-motion: reduce) {
+  .roll-marker, .roll-result, .tile.chg-up .hex, .tile.chg-down .hex, .tile.chg-other .hex { animation: none; }
+}

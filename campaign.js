@@ -168,6 +168,14 @@ function changeTiles(ids, f) {
   }
 }
 
+// A chance roll that remembers its odds and where it landed, so the
+// outcome card can show it. Success when the roll lands below the chance.
+function roll(c, chance, success, failure) {
+  const value = c.rand();
+  const ok = value < chance;
+  return { chance, value, ok, label: ok ? success : failure };
+}
+
 const ptsWord = (x) => `${Math.abs(x)} point${Math.abs(x) === 1 ? '' : 's'}`;
 
 // ---------- Court challenges ----------
@@ -205,18 +213,15 @@ function courtEvent(c) {
     tiles: [],
     court: true,
     choices: [
-      { label: 'Defend the map', cost: 2, chance: true,
+      { label: 'Defend the map', cost: 2, chance: true, noPreview: true,
         detail: `About a ${pctText(winChance)} chance to win. If you lose, the court orders a redraw: equal populations, average compactness ≥ ${court.pp.toFixed(2)} and an efficiency gap of at most ${pctText(court.eg)} in your favour.`,
         apply: () => {
-          if (c.rand() < winChance) {
-            c.courtCases.push({ year: c.year, outcome: 'won' });
-            return 'you defended the map and the court upheld it.';
-          }
-          c.courtCases.push({ year: c.year, outcome: 'lost' });
-          beginRedraw(c, 'court');
-          return 'you defended the map and lost: the court ordered a redraw.';
+          const r = roll(c, winChance, 'The court upheld your map.', 'The court struck down your map and ordered a redraw.');
+          c.courtCases.push({ year: c.year, outcome: r.ok ? 'won' : 'lost' });
+          if (!r.ok) beginRedraw(c, 'court');
+          return { text: r.ok ? 'you defended the map and the court upheld it.' : 'you defended the map and lost: the court ordered a redraw.', roll: r };
         } },
-      { label: 'Settle and redraw it yourself',
+      { label: 'Settle and redraw it yourself', noPreview: true, effectText: 'You will redraw the map before the year continues.',
         detail: `Redraw now with equal populations and average compactness ≥ ${settle.pp.toFixed(2)}.`,
         apply: () => {
           c.courtCases.push({ year: c.year, outcome: 'settled' });
@@ -352,9 +357,9 @@ const EVENT_TYPES = {
         { label: 'Challenge it in court', cost: 1, detail: 'A 50% chance the court blocks it.', chance: true,
           apply: (preview) => {
             if (preview) return '';
-            if (c.rand() < 0.5) return 'you challenged the law and the court blocked it.';
-            changeTiles(ids, { turnout: -0.06 });
-            return 'you challenged the law but lost.';
+            const r = roll(c, 0.5, 'The court blocked the law.', 'The court let the law stand: turnout falls 6% in those hexes.');
+            if (!r.ok) changeTiles(ids, { turnout: -0.06 });
+            return { text: r.ok ? 'you challenged the law and the court blocked it.' : 'you challenged the law but lost.', roll: r };
           } },
         { label: 'Let it stand', detail: 'Turnout in those hexes falls 6%.',
           apply: () => { changeTiles(ids, { turnout: -0.06 }); return 'you let the law stand.'; } },
@@ -374,9 +379,9 @@ const EVENT_TYPES = {
         { label: 'Recruit a well-known local', cost: 1, detail: 'A gamble: 50% chance of +1 point there for the decade, 50% chance of −2.', chance: true,
           apply: (preview) => {
             if (preview) return '';
-            const good = c.rand() < 0.5;
-            changeTiles(ids, { lean: good ? 1 : -2 });
-            return good ? `your star recruit in District ${d + 1} is a hit.` : `your star recruit in District ${d + 1} flopped.`;
+            const r = roll(c, 0.5, `Your recruit is a hit: +1 point in District ${d + 1}.`, `Your recruit flopped: −2 points in District ${d + 1}.`);
+            changeTiles(ids, { lean: r.ok ? 1 : -2 });
+            return { text: r.ok ? `your star recruit in District ${d + 1} is a hit.` : `your star recruit in District ${d + 1} flopped.`, roll: r };
           } },
         { label: 'Promote a party loyalist', detail: '−1 point there for the rest of the decade.',
           apply: () => { changeTiles(ids, { lean: -1 }); return `you promoted a loyalist in District ${d + 1}.`; } },
@@ -393,12 +398,14 @@ const EVENT_TYPES = {
           apply: (preview) => {
             if (preview) return '';
             const mine = districtsYouLead();
-            if (mine.length && c.rand() < 0.35) {
+            const r = roll(c, 0.65, 'The donation stayed quiet.', 'The donation leaked to the press.');
+            if (!r.ok && mine.length) {
               const d = pick(mine, c.rand);
               c.nextBonus[d] -= 0.03;
-              return `you took the donation, and it leaked in District ${d + 1}.`;
+              r.label = `The donation leaked: −3 points in District ${d + 1} at the next election.`;
+              return { text: `you took the donation, and it leaked in District ${d + 1}.`, roll: r };
             }
-            return 'you took the donation quietly.';
+            return { text: 'you took the donation quietly.', roll: r };
           } },
         { label: 'Decline politely', detail: 'No change.', apply: () => 'you declined the donation.' },
       ],
@@ -537,6 +544,7 @@ function expectedShares(c) {
 
 // Apply a choice to a copy of the state and report how district shares move.
 function previewChoice(c, choice) {
+  if (choice.noPreview) return null; // e.g. court choices change more than the map
   const snapTiles = game.tiles.map((t) => [t.pop, t.lean, t.turnout]);
   const snapSwing = c.nextSwing;
   const snapBonus = c.nextBonus.slice();
@@ -560,17 +568,80 @@ function chooseOption(i) {
   const ev = c.event;
   const ch = ev.choices[i];
   if ((ch.cost || 0) > c.capital) return;
-  c.capital += (ch.gain || 0) - (ch.cost || 0);
-  const outcome = ch.apply(false);
-  c.log.unshift(`${c.year} · ${ev.title}: ${outcome}`);
+
+  // Snapshot, apply, then record exactly what changed for the outcome card.
+  const before = {
+    tiles: game.tiles.map((t) => [t.pop, t.lean, t.turnout]),
+    shares: expectedShares(c),
+    swing: c.nextSwing,
+    bonus: c.nextBonus.slice(),
+    reform: c.reformPressure,
+  };
+  const capitalDelta = (ch.gain || 0) - (ch.cost || 0);
+  c.capital += capitalDelta;
+  let result = ch.apply(false);
+  if (typeof result === 'string') result = { text: result };
+  c.log.unshift(`${c.year} · ${ev.title}: ${result.text}${result.roll ? ` (${pctText(result.roll.chance)} chance)` : ''}`);
   c.event = null;
+
+  const after = expectedShares(c);
+  const tiles = [];
+  game.tiles.forEach((t, k) => {
+    const [p0, l0, u0] = before.tiles[k];
+    const dl = t.lean - l0;
+    const dp = t.pop / p0 - 1;
+    const du = t.turnout / u0 - 1;
+    if (Math.abs(dl) >= 0.05 || Math.abs(dp) >= 0.005 || Math.abs(du) >= 0.005) tiles.push({ id: t.id, lean: dl, pop: dp, turnout: du });
+  });
+  const mods = [];
+  if (Math.abs(c.nextSwing - before.swing) > 1e-6) mods.push(`statewide ${signedPts(c.nextSwing - before.swing)}`);
+  c.nextBonus.forEach((b, d) => { if (Math.abs(b - before.bonus[d]) > 1e-6) mods.push(`District ${d + 1} ${signedPts(b - before.bonus[d])}`); });
+  c.outcome = {
+    title: ev.title,
+    choice: ch.label,
+    court: !!ev.court,
+    roll: result.roll || null,
+    capital: capitalDelta,
+    reform: c.reformPressure - before.reform,
+    districts: after.map((a, d) => ({ d, before: before.shares[d], after: a }))
+      .filter((x) => Math.abs(x.after - x.before) >= 0.0005),
+    tiles,
+    tileMap: new Map(tiles.map((x) => [x.id, x])),
+    mods,
+    nextElection: isElectionYear(c.year) ? c.year : c.year + 1,
+    soundDone: false,
+  };
+  render();
+}
+
+const signedPts = (x) => `${x >= 0 ? '+' : '−'}${Math.abs(x * 100).toFixed(1)} pts`;
+
+// Leave the outcome card: start the redraw, or let the year pass.
+function continueFromOutcome() {
+  const c = game.campaign;
+  c.outcome = null;
   if (c.redraw) {
-    // The map unlocks; the year continues once the new map is submitted.
-    Sound.play(ev.court ? 'buzz' : 'event');
     render();
     return;
   }
   finishYear();
+}
+
+// Label for a changed hex while the outcome card is showing.
+function outcomeTileLabel(t) {
+  const c = game.campaign;
+  const x = c && c.outcome && c.outcome.tileMap.get(t.id);
+  if (!x) return null;
+  if (Math.abs(x.lean) >= 0.05) return `${x.lean > 0 ? '+' : '−'}${Math.abs(x.lean).toFixed(1)}`;
+  if (Math.abs(x.turnout) >= 0.005) return `T ${x.turnout > 0 ? '+' : '−'}${Math.abs(Math.round(x.turnout * 100))}%`;
+  return `P ${x.pop > 0 ? '+' : '−'}${Math.abs(Math.round(x.pop * 100))}%`;
+}
+
+// Change in a district's expected share from the last event (for the district list).
+function outcomeDistrictDelta(d) {
+  const c = game.campaign;
+  const x = c && c.outcome && c.outcome.districts.find((y) => y.d === d);
+  return x ? x.after - x.before : 0;
 }
 
 function finishYear() {
@@ -729,6 +800,50 @@ function renderCampaign() {
     const sc = campaignScore(c);
     body = `<p class="camp-lead"><strong>Decade complete.</strong> ${sc.seats} seats won; target reached in ${sc.reached} of ${c.elections.length} elections.</p>
       <button type="button" class="primary" id="new-campaign">New campaign</button>`;
+  } else if (c.outcome) {
+    const o = c.outcome;
+    let rollHtml = '';
+    if (o.roll) {
+      const chance = Math.round(o.roll.chance * 100);
+      const at = Math.min(99, Math.max(1, Math.round(o.roll.value * 100)));
+      rollHtml = `
+        <div class="roll ${o.roll.ok ? 'roll-ok' : 'roll-bad'}">
+          <div class="roll-head">🎲 ${chance}% chance of success</div>
+          <div class="roll-bar" aria-hidden="true">
+            <span class="roll-zone" style="width:${chance}%"></span>
+            <span class="roll-marker" style="--at:${at}%"></span>
+          </div>
+          <p class="roll-result">${o.roll.ok ? '✓' : '✗'} ${o.roll.label}</p>
+        </div>`;
+    }
+    const rows = o.districts.map((x) => {
+      const dlt = x.after - x.before;
+      return `<li><span class="dot" style="background:${DISTRICT_COLORS[x.d]}"></span>District ${x.d + 1}:
+        ${fmtPct(x.before)} → <strong>${fmtPct(x.after)}</strong>
+        <span class="${dlt > 0 ? 'ok' : 'bad'}">${dlt > 0 ? '▲' : '▼'} ${Math.abs(dlt * 100).toFixed(1)}</span></li>`;
+    }).join('');
+    const lines = [];
+    if (o.capital) lines.push(`<span class="${o.capital > 0 ? 'ok' : ''}">Capital ${o.capital > 0 ? '+' : '−'}⚑${Math.abs(o.capital)}</span> (now ⚑${c.capital})`);
+    if (o.tiles.length) lines.push(`${o.tiles.length} hex${o.tiles.length === 1 ? '' : 'es'} changed: outlined on the map`);
+    if (o.mods.length) lines.push(`At the ${o.nextElection} election: ${o.mods.join(', ')}`);
+    if (o.reform > 0) lines.push(`Lawsuit risk +${pctText(o.reform)} for the rest of the decade`);
+    if (!o.districts.length && !lines.length && !o.roll) lines.push('Nothing else changed.');
+    body = `
+      <div class="event-card outcome-card ${o.court ? 'court-card' : ''}">
+        <p class="event-year">${c.year} · What happened</p>
+        <h3>${o.title}</h3>
+        <p>You chose: <strong>${o.choice}</strong>.</p>
+        ${rollHtml}
+        ${lines.length ? `<ul class="outcome-lines">${lines.map((l) => `<li>${l}</li>`).join('')}</ul>` : ''}
+        ${rows ? `<p class="small muted outcome-sub">Expected vote share at the ${o.nextElection} election:</p><ul class="outcome-districts">${rows}</ul>` : ''}
+        <button type="button" class="primary" id="outcome-continue">${c.redraw ? 'Redraw the map'
+          : isElectionYear(c.year) ? `Continue to the ${c.year} election` : `Continue to ${c.year + 1}`}</button>
+      </div>`;
+    if (o.roll && !o.soundDone) {
+      o.soundDone = true;
+      Sound.play('tick');
+      setTimeout(() => Sound.play(o.roll.ok ? 'legal' : 'buzz'), 900);
+    }
   } else if (c.redraw) {
     const checks = redrawChecks(c);
     body = `
@@ -753,7 +868,8 @@ function renderCampaign() {
     const choices = ev.choices.map((ch, i) => {
       const pv = ev.previews[i];
       let effect = '';
-      if (ch.chance) effect = '<span class="muted">Outcome depends on chance.</span>';
+      if (ch.effectText) effect = `<span class="muted">${ch.effectText}</span>`;
+      else if (ch.chance) effect = '<span class="muted">Outcome depends on chance.</span>';
       else if (pv && pv.length) {
         effect = pv.slice(0, 4).map((x) => `<span class="${x.delta > 0 ? 'ok' : 'bad'}">D${x.d + 1} ${x.delta > 0 ? '+' : '−'}${Math.abs(x.delta * 100).toFixed(1)}</span>`).join(' · ');
       } else effect = '<span class="muted">No change to your districts\' vote shares.</span>';
@@ -794,6 +910,8 @@ function renderCampaign() {
   if (start) start.addEventListener('click', startDecade);
   const again = els.campaign.querySelector('#new-campaign');
   if (again) again.addEventListener('click', () => startGame(els.size.value, randomSeed()));
+  const cont = els.campaign.querySelector('#outcome-continue');
+  if (cont) cont.addEventListener('click', continueFromOutcome);
   const submit = els.campaign.querySelector('#submit-redraw');
   if (submit) submit.addEventListener('click', submitRedraw);
   els.campaign.querySelectorAll('[data-choice]').forEach((b) => {
@@ -808,9 +926,14 @@ function renderCampaign() {
 function highlightEventTiles(strong) {
   const c = game.campaign;
   const ids = new Set(c && c.event ? c.event.tiles : []);
+  const changed = c && c.outcome ? c.outcome.tileMap : new Map();
   tileEls.forEach((el, i) => {
     el.g.classList.toggle('event-hex', ids.has(i));
     el.g.classList.toggle('event-hex-strong', strong && ids.has(i));
+    const x = changed.get(i);
+    el.g.classList.toggle('chg-up', !!x && x.lean >= 0.05);
+    el.g.classList.toggle('chg-down', !!x && x.lean <= -0.05);
+    el.g.classList.toggle('chg-other', !!x && Math.abs(x.lean) < 0.05);
   });
 }
 
@@ -824,5 +947,5 @@ function leanChange(t) {
 const campaignLocked = () => !!(game && game.campaign && !game.campaign.redraw);
 
 if (typeof module !== 'undefined') {
-  module.exports = { startDecade, driftYear, campaignElection, EVENT_TYPES, lawsuitRisk };
+  module.exports = { startDecade, driftYear, campaignElection, EVENT_TYPES, lawsuitRisk, roll };
 }

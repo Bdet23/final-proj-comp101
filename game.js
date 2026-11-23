@@ -1485,6 +1485,13 @@ function popScale(t) {
 const sizedTiles = () => SIZE_TILES_BY_POPULATION && game.mode !== 'voters' && ui.view !== 'districts';
 
 function tileText(t) {
+  const [main, sub] = baseTileText(t);
+  // While a campaign outcome is showing, changed hexes show their change underneath.
+  const changed = typeof outcomeTileLabel === 'function' ? outcomeTileLabel(t) : null;
+  return changed ? [main, changed] : [main, sub];
+}
+
+function baseTileText(t) {
   if (ui.label === 'none' && game.mode === 'percent') return ['', ''];
   if (ui.view === 'change' && ui.label !== 'none') {
     const dlt = leanChange(t);
@@ -1495,8 +1502,10 @@ function tileText(t) {
   }
   if (game.mode === 'voters') return [supports(t) ? '✓' : '✗', ''];
   if (game.mode === 'binary') return [fmtInt(t.pop), supports(t) ? '✓' : '✗'];
-  if (ui.label === 'both') return [fmtK(t.pop), shownLean(t) + '%'];
-  return ui.label === 'pop' ? [fmtK(t.pop), ''] : [shownLean(t) + '%', ''];
+  // Real states show one decimal; generated maps show whole numbers.
+  const leanLabel = (game.state ? shownLean(t) : Math.round(shownLean(t))) + '%';
+  if (ui.label === 'both') return [fmtK(t.pop), leanLabel];
+  return ui.label === 'pop' ? [fmtK(t.pop), ''] : [leanLabel, ''];
 }
 
 function renderTiles(stats) {
@@ -1856,6 +1865,10 @@ function renderDistrictList(stats) {
     if (game.mode === 'percent') {
       vMain.textContent = fmtPct(s.share);
       vSub.textContent = ui.sim ? `${fmtChance(ui.sim.winProb[d])} chance` : s.wins ? 'you lead' : 'opponent leads';
+      const ev = typeof outcomeDistrictDelta === 'function' ? outcomeDistrictDelta(d) : 0;
+      if (Math.abs(ev) >= 0.0005) {
+        vSub.insertAdjacentHTML('afterbegin', `<span class="chg-chip ${ev > 0 ? 'ok' : 'bad'}">${ev > 0 ? '▲' : '▼'}${Math.abs(ev * 100).toFixed(1)}</span> `);
+      }
     } else {
       vMain.textContent = `${votesFor(s)} for`;
       vSub.textContent = `${votesAgainst(s)} against`;
