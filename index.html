@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Gerrymander</title>
   <meta name="description" content="Draw district lines on a hex map so your candidate wins the most seats.">
-  <link rel="stylesheet" href="style.css?v=15">
+  <link rel="stylesheet" href="style.css?v=16">
 </head>
 <body>
   <header class="topbar">
@@ -30,8 +30,69 @@
       </label>
       <button id="new-map" type="button" class="secondary">New map</button>
       <button id="tutorial-btn" type="button" class="secondary">Tutorial</button>
+      <button id="menu-btn" type="button" class="secondary">Menu</button>
+      <button id="mute-btn" type="button" class="secondary" aria-pressed="false">🔊 Sound on</button>
     </nav>
   </header>
+
+  <section id="start-screen" class="start-screen" aria-label="Start" hidden>
+    <svg id="start-bg" class="start-bg" preserveAspectRatio="xMidYMid slice" aria-hidden="true"></svg>
+    <div class="start-inner">
+      <div class="start-logo">
+        <svg class="logo-hex" viewBox="-32 -32 64 64" aria-hidden="true">
+          <polygon points="0,-30 0,30 -25.98,15 -25.98,-15" fill="#c0392b"/>
+          <polygon points="0,-30 25.98,-15 25.98,15 0,30" fill="#2b5fb4"/>
+          <polygon points="0,-30 25.98,-15 25.98,15 0,30 -25.98,15 -25.98,-15" fill="none" stroke="#fff" stroke-width="3"/>
+        </svg>
+        <div>
+          <h1 class="wordmark">GERRYMANDER</h1>
+          <p class="tagline">Draw the lines. Win the seats.</p>
+        </div>
+      </div>
+
+      <div class="start-cards">
+        <div class="start-card start-how">
+          <h2>How to play</h2>
+          <ol>
+            <li>Pick a district (keys <kbd>1</kbd>–<kbd>8</kbd>).</li>
+            <li>Click or drag hexes to paint them in.</li>
+            <li>Keep each district connected and within the population range.</li>
+            <li>Hold the election and win the target number of seats.</li>
+          </ol>
+          <p class="start-goal">You have fewer votes statewide: pack their voters, crack your own.</p>
+        </div>
+
+        <div class="start-card start-choose">
+          <h2>Choose how to play</h2>
+          <button id="start-tutorial" type="button" class="start-big primary start-primary">Start tutorial</button>
+          <div id="start-dots" class="start-dots" role="img"></div>
+          <button id="start-play" type="button" class="start-big">Play a map</button>
+          <div class="start-field">
+            <span class="start-field-label">Mode</span>
+            <div class="segmented start-modes" role="group" aria-label="Mode">
+              <button type="button" data-start-mode="classic">Classic</button>
+              <button type="button" data-start-mode="realistic">Realistic</button>
+              <button type="button" data-start-mode="campaign">Campaign</button>
+            </div>
+          </div>
+          <label class="start-field">
+            <span class="start-field-label">Map</span>
+            <select id="start-size"></select>
+          </label>
+        </div>
+      </div>
+
+      <div class="start-legend">
+        <span>Opponent</span>
+        <span class="legend-bar" aria-hidden="true"></span>
+        <span>You</span>
+        <span class="start-sep">·</span>
+        <span>Inner hex size = population</span>
+        <span class="start-sep">·</span>
+        <span>Keys: <kbd>1</kbd>–<kbd>8</kbd> district, <kbd>E</kbd> eraser, <kbd>V</kbd> colours, <kbd>L</kbd> labels</span>
+      </div>
+    </div>
+  </section>
 
   <main class="layout">
     <section class="board-wrap">
@@ -134,8 +195,10 @@
     <div class="dialog-actions" id="result-actions"></div>
   </dialog>
 
-  <script src="states.js?v=15"></script>
-  <script src="game.js?v=15"></script>
-  <script src="campaign.js?v=15"></script>
+  <script src="states.js?v=16"></script>
+  <script src="sound.js?v=16"></script>
+  <script src="game.js?v=16"></script>
+  <script src="campaign.js?v=16"></script>
+  <script src="start.js?v=16"></script>
 </body>
 </html>

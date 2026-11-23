@@ -2,6 +2,12 @@
 
 A browser game about gerrymandering. Group hex tiles into districts so your candidate wins a majority of seats, even though they have fewer votes statewide.
 
+## Start screen and sound
+
+A normal visit opens a start screen with the title, the four core rules, a **Start tutorial** (or Continue / Replay) button with lesson progress, and **Play a map** with Mode and Map choices. Press Enter for the highlighted button; the **Menu** button in the header returns to it. Direct links (`?tutorial=`, `?state=`, `?seed=`) skip it.
+
+Sound is synthesized in the browser (`sound.js`, no audio files): clicks for painting and erasing, a chime when a district becomes legal, a buzz for an illegal map, a drum-roll and a fanfare or falling tone for results, ticks and a thud on the stress-test sliders, and a chime for campaign events. A quiet ambient loop starts on the first Start/Play click, keeps playing across maps, speeds up while the map is legal, drops to 40% on the start screen and fades out during elections. **Sound on/off** in the header is remembered between visits.
+
 ## How to play
 
 - Each hex tile shows its **population** and the **expected vote share** for your candidate.

@@ -1254,6 +1254,7 @@ function loadMap(map) {
   ui.revealed = false;
   ui.swing = 0;
   ui.turnoutGap = 0;
+  ui.legalPrev = null;
   game.campaignMode = ui.campaign && !!game.realistic && game.lesson == null;
   game.campaign = null;
   if (ui.view === 'change') ui.view = 'votes';
@@ -1903,6 +1904,11 @@ function currentStats() {
 function render() {
   if (!game) return;
   const stats = currentStats();
+  // Sound: a chime when a district becomes legal while painting; a faster pulse while the map is legal.
+  const legalNow = stats.map(isLegal);
+  if (ui.painting && ui.legalPrev && legalNow.some((l, d) => l && !ui.legalPrev[d])) Sound.play('legal');
+  ui.legalPrev = legalNow;
+  Sound.setLegal(legalNow.every(Boolean) && ui.assign.every((d) => d >= 0));
   ui.sim = game.realistic ? simulatePlan(game, ui.assign) : null;
   ui.cushions = game.realistic ? computeCushions(game, ui.assign) : null;
   ui.scenario = game.realistic && (ui.swing !== 0 || ui.turnoutGap !== 0)
@@ -1952,6 +1958,7 @@ function applyPaint(id) {
   const next = ui.painting === 'erase' ? -1 : ui.tool;
   if (ui.assign[id] !== next) {
     ui.assign[id] = next;
+    Sound.play(next === -1 ? 'erase' : 'paint');
     render();
   }
 }
@@ -1991,15 +1998,25 @@ function bindEvents() {
   for (const btn of els.labelButtons) btn.addEventListener('click', () => setLabel(btn.dataset.label));
   els.submit.addEventListener('click', holdElection);
   els.tutorialBtn.addEventListener('click', () => startLesson(Math.min(lessonsCompleted(), TUTORIAL.length - 1)));
+  const seatsAtScenario = () => (ui.scenario ? ui.scenario.filter((x) => x > 0.5).length
+    : currentStats().filter((x) => x.wins).length);
   els.swingSlider.addEventListener('input', () => {
+    const before = seatsAtScenario();
+    const oldPts = Math.trunc(ui.swing * 100);
     ui.swing = Number(els.swingSlider.value) / 100;
     render();
+    if (seatsAtScenario() !== before) Sound.play('thud');
+    else if (Math.trunc(ui.swing * 100) !== oldPts) Sound.play('tick');
   });
   els.swingReset.addEventListener('click', () => { ui.swing = 0; ui.turnoutGap = 0; render(); });
   els.gapSlider.addEventListener('input', () => {
+    const before = seatsAtScenario();
     ui.turnoutGap = Number(els.gapSlider.value) / 100;
     render();
+    Sound.play(seatsAtScenario() !== before ? 'thud' : 'tick');
   });
+  // The ambient loop comes back when results (or any dialog) close.
+  els.dialog.addEventListener('close', () => Sound.resume());
   els.uncertaintyInfo.addEventListener('click', showUncertaintyInfo);
   for (const btn of els.partyButtons) {
     btn.addEventListener('click', () => {
@@ -2036,6 +2053,7 @@ function bindEvents() {
 
   document.addEventListener('keydown', (e) => {
     if (!game || els.dialog.open || e.target.closest('input, select, textarea')) return;
+    if (document.body.classList.contains('start-open')) return;
     if (e.metaKey || e.ctrlKey || e.altKey) return;
     const num = Number(e.key);
     if (Number.isInteger(num) && num >= 1 && num <= game.cfg.districts) setTool(num - 1);
@@ -2198,6 +2216,7 @@ function holdElection() {
   const stats = currentStats();
   const problems = validatePlan(stats);
   if (problems.length) {
+    Sound.play('buzz');
     openDialog(
       `<h2>This map isn't legal yet</h2>
        <p>Fix these problems before holding the election:</p>
@@ -2214,6 +2233,7 @@ function holdElection() {
 
   const seats = stats.filter((s) => s.wins).length;
   const won = seats >= game.target;
+  Sound.election(won);
   const rows = stats.map((s, d) => `
     <tr>
       <td><span class="dot" style="background:${DISTRICT_COLORS[d]}"></span>District ${d + 1}</td>
@@ -2311,6 +2331,7 @@ function showUncertaintyInfo() {
 function holdRealisticElection(stats) {
   const sim = simulatePlan(game, ui.assign);
   const won = sim.pTarget >= PASS_PROBABILITY;
+  Sound.election(won);
   const n = game.cfg.districts;
   const need = Math.round(PASS_PROBABILITY * 100);
 
@@ -2454,6 +2475,7 @@ function init() {
   if (stateParam && ['dem', 'rep'].includes(params.get('party'))) ui.party = params.get('party');
   els.size.value = sizeKey;
   bindEvents();
+  initStartScreen();
 
   const lessonParam = parseInt(params.get('tutorial'), 10);
   if (lessonParam >= 1 && lessonParam <= TUTORIAL.length) {
@@ -2462,11 +2484,10 @@ function init() {
     startGame(stateParam);
   } else if (Number.isFinite(seedParam) && seedParam >= 0) {
     startGame(sizeKey, seedParam);
-  } else if (!storageGet(SKIPPED_KEY) && lessonsCompleted() < TUTORIAL.length) {
-    // First visit: start with the next unfinished lesson.
-    startLesson(lessonsCompleted());
   } else {
+    // A normal visit opens the start screen; a map loads behind it so Menu has something to return to.
     startGame(sizeKey, randomSeed());
+    showStartScreen();
   }
 }
 

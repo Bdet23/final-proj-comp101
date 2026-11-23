@@ -84,6 +84,7 @@ function startDecade() {
   };
   ui.tool = 'erase';
   game.campaign.event = drawEvent(game.campaign);
+  Sound.play('event');
   render();
 }
 
@@ -326,6 +327,7 @@ function nextCampaignYear() {
     return;
   }
   c.event = drawEvent(c);
+  Sound.play('event');
   render();
 }
 
@@ -365,6 +367,7 @@ function campaignElection(c) {
 
 function showCampaignElection(r) {
   const n = game.cfg.districts;
+  Sound.election(r.reached);
   const rows = r.shares.map((x, d) => `
     <tr>
       <td><span class="dot" style="background:${DISTRICT_COLORS[d]}"></span>District ${d + 1}</td>
