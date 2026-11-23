@@ -70,6 +70,12 @@ Choose **Mode: Campaign** to play a decade on a Realistic map (generated or a re
 
 The **Change** colour view shows how far each hex has moved since the map was drawn.
 
+**Political capital (⚑).** You start each decade with 3 and earn 1 per election (2 if you reach your target). Many choices cost capital; some earn it.
+
+**Court challenges.** Each year a lawsuit may be filed. The risk (shown in the campaign header) rises with the map's efficiency gap in your favour, with districts that have drifted outside ±5% of equal population, and if you ignore a reform campaign. You can **defend** the map (⚑2, with a win chance shown) or **settle**. Losing or settling unlocks the map for a redraw: populations must be equal at today's numbers and the average Polsby–Popper compactness must reach 0.35 (settlement) or 0.40 plus an efficiency gap of at most 7% in your favour (court order). Submit the new map to continue the decade.
+
+**Events.** Housing boom, factory closure, national wave, scandal, voting restrictions, retirement, donor offer, infrastructure project, ballot measure, severe storms, leader's gaffe, independent candidate, reform campaign and strong economy. No event repeats within three years.
+
 ## How maps are made
 
 1. **Voter geography first.** Dense cities, suburbs, countryside, a corridor (river or highway) and scattered pockets set each tile's population and vote share. No district plan is involved, so the map does not reveal an answer.

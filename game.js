@@ -1978,8 +1978,8 @@ function render() {
   els.goal.hidden = !!game.campaign;
   els.submit.textContent = game.campaignMode ? 'Start the decade' : 'Hold election';
   els.submit.hidden = !!game.campaign;
-  els.reset.disabled = !!game.campaign;
-  els.eraser.disabled = !!game.campaign;
+  els.reset.disabled = campaignLocked();
+  els.eraser.disabled = campaignLocked();
   renderDistrictList(stats);
   renderControls();
 }
@@ -2022,7 +2022,7 @@ function bindEvents() {
   els.board.addEventListener('pointerdown', (e) => {
     const id = tileAt(e);
     if (!game || id == null || (e.button !== undefined && e.button !== 0)) return;
-    if (game.campaign) return; // the map is locked during a campaign decade
+    if (campaignLocked()) return; // the map is locked during a campaign decade, except for a redraw
     e.preventDefault();
     ui.painting = ui.tool === 'erase' || ui.assign[id] === ui.tool ? 'erase' : 'paint';
     ui.lastPainted = null;
@@ -2042,7 +2042,7 @@ function bindEvents() {
 
   els.eraser.addEventListener('click', () => setTool('erase'));
   els.reset.addEventListener('click', () => {
-    if (!game || game.campaign) return;
+    if (!game || campaignLocked()) return;
     if (ui.assign.some((d) => d >= 0) && !window.confirm('Clear all districts on this map?')) return;
     ui.assign.fill(-1);
     render();

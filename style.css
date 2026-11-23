@@ -942,3 +942,19 @@ body.start-open { overflow: hidden; }
   .board-scroll { max-height: 75vh; }
 }
 #board { max-height: none; min-height: 0; }
+
+/* ---------- Campaign stage 2 ---------- */
+.camp-stats { display: inline-flex; flex-wrap: wrap; gap: 0.3rem 0.9rem; font-variant-numeric: tabular-nums; font-size: 0.92rem; }
+.camp-stat strong { font-size: 1.05rem; }
+.choices { grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); }
+.choice:disabled { opacity: 0.5; cursor: not-allowed; }
+.choice .cost {
+  display: inline-block; margin-left: 0.3rem; padding: 0 0.35rem; border-radius: 999px;
+  font-size: 0.78rem; font-weight: 700; border: 1px solid currentColor; vertical-align: 1px;
+}
+.court-card { border-color: var(--bad); }
+.court-card h3 { color: var(--bad); }
+.redraw-card { border-color: var(--accent); }
+.redraw-checks { display: flex; flex-direction: column; gap: 0.3rem; margin: 0.4rem 0 0.6rem; }
+.redraw-checks li { display: grid; grid-template-columns: 20px minmax(0, 1fr) auto; gap: 0.5rem; align-items: center; font-size: 0.92rem; }
+#submit-redraw[aria-disabled="true"] { opacity: 0.6; }
