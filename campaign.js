@@ -32,13 +32,17 @@ const MID_REDRAW_RISK = 0.15;   // extra yearly lawsuit risk for the rest of tha
 const NATIONAL_GROWTH = 0.07;   // typical US population growth per decade
 // Redraw rules: a court order is stricter than a settlement; an independent
 // commission is strictest. Census and mid-decade redraws only need legal districts.
+// Compactness is relative to the map: `ppShare` of a neutral benchmark (the most
+// compact of several random legal maps at today's populations), because how
+// compact districts can be depends on the board and where people live.
 const REDRAW_RULES = {
-  court: { label: 'Court-ordered redraw', pp: 0.4, eg: 0.07 },
-  settle: { label: 'Settlement redraw', pp: 0.35, eg: null },
-  census: { label: 'Census redraw', pp: null, eg: null },
-  commission: { label: "Independent commission's map", pp: 0.45, eg: 0.04 },
-  mid: { label: 'Mid-decade redraw', pp: null, eg: null },
+  court: { label: 'Court-ordered redraw', ppShare: 0.9, eg: 0.07 },
+  settle: { label: 'Settlement redraw', ppShare: 0.85, eg: null },
+  census: { label: 'Census redraw', ppShare: null, eg: null },
+  commission: { label: "Independent commission's map", ppShare: 0.95, eg: 0.04 },
+  mid: { label: 'Mid-decade redraw', ppShare: null, eg: null },
 };
+const BENCHMARK_PLANS = 12;
 const decadeStart = (c) => CAMPAIGN_FIRST_YEAR + 10 * c.decade;
 const decadeEnd = (c) => decadeStart(c) + 9;
 // The year the current decade's map was drawn (baseline for the Change view).
@@ -242,7 +246,7 @@ function courtEvent(c) {
     court: true,
     choices: [
       { label: 'Defend the map', cost: 2, chance: true, noPreview: true,
-        detail: `About a ${pctText(winChance)} chance to win. If you lose, the court orders a redraw: equal populations, average compactness ≥ ${court.pp.toFixed(2)} and an efficiency gap of at most ${pctText(court.eg)} in your favour.`,
+        detail: `About a ${pctText(winChance)} chance to win. If you lose, the court orders a redraw: equal populations, compactness at least ${pctText(court.ppShare)} of a neutral map's, and an efficiency gap of at most ${pctText(court.eg)} in your favour.`,
         apply: () => {
           const r = roll(c, winChance, 'The court upheld your map.', 'The court struck down your map and ordered a redraw.');
           c.courtCases.push({ year: c.year, outcome: r.ok ? 'won' : 'lost' });
@@ -250,7 +254,7 @@ function courtEvent(c) {
           return { text: r.ok ? 'you defended the map and the court upheld it.' : 'you defended the map and lost: the court ordered a redraw.', roll: r };
         } },
       { label: 'Settle and redraw it yourself', noPreview: true, effectText: 'You will redraw the map before the year continues.',
-        detail: `Redraw now with equal populations and average compactness ≥ ${settle.pp.toFixed(2)}.`,
+        detail: `Redraw now with equal populations and compactness at least ${pctText(settle.ppShare)} of a neutral map's.`,
         apply: () => {
           c.courtCases.push({ year: c.year, outcome: 'settled' });
           beginRedraw(c, 'settle');
@@ -261,9 +265,38 @@ function courtEvent(c) {
 }
 
 function beginRedraw(c, kind) {
-  c.redraw = { kind, ...REDRAW_RULES[kind] };
+  const rule = REDRAW_RULES[kind];
   game.ideal = currentIdeal(); // populations must be equal at today's numbers
+  c.redraw = { kind, eg: rule.eg, pp: null, benchmark: null };
+  if (rule.ppShare) {
+    c.redraw.benchmark = benchmarkCompactness();
+    c.redraw.pp = Math.floor(c.redraw.benchmark * rule.ppShare * 100) / 100;
+  }
   ui.tool = 0;
+}
+
+// Average Polsby-Popper of a plan (same formula as the results dialog).
+function planCompactness(plan) {
+  const n = game.cfg.districts;
+  const cells = new Array(n).fill(0);
+  const edges = new Array(n).fill(0);
+  for (const t of game.tiles) {
+    const d = plan[t.id];
+    if (d < 0) continue;
+    cells[d]++;
+    for (const j of t.nbrs) if (j < 0 || plan[j] !== d) edges[d]++;
+  }
+  let sum = 0;
+  for (let d = 0; d < n; d++) sum += edges[d] ? (4 * Math.PI * cells[d] * HEX_AREA) / (edges[d] * edges[d]) : 0;
+  return sum / n;
+}
+
+// The most compact of several random legal maps at today's populations.
+function benchmarkCompactness() {
+  const plans = sampleLegalPlans(game.tiles, game.cfg.districts, game.ideal, mulberry32(game.campaign.seed + game.campaign.year),
+    game.tolerance, BENCHMARK_PLANS, 60000, 2, 0.01);
+  if (!plans.length) return 0.35;
+  return Math.max(...plans.map((x) => planCompactness(x.plan)));
 }
 
 // The redraw's rules, each with whether it is met now.
@@ -277,7 +310,8 @@ function redrawChecks(c) {
     { ok: assigned && legal === n, text: `Every district legal: connected, ${popRangeText()}`, value: `${legal} / ${n}` },
   ];
   if (c.redraw.pp != null) {
-    checks.push({ ok: m.avgCompact >= c.redraw.pp, text: `Average compactness at least ${c.redraw.pp.toFixed(2)}`, value: m.avgCompact.toFixed(2) });
+    checks.push({ ok: m.avgCompact >= c.redraw.pp, value: m.avgCompact.toFixed(2),
+      text: `Average compactness at least ${c.redraw.pp.toFixed(2)} (a neutral map reaches ${c.redraw.benchmark.toFixed(2)})` });
   }
   if (c.redraw.eg != null) {
     checks.push({ ok: m.efficiencyGap <= c.redraw.eg, text: `Efficiency gap at most ${pctText(c.redraw.eg)} in your favour`,
@@ -355,7 +389,7 @@ function runCensus(c) {
       : `The state keeps its <strong>${n1} seats</strong>.`;
   const rules = c.commission
     ? `Because the reform initiative passed, the new map must meet an independent commission's rules:
-       average compactness of at least ${REDRAW_RULES.commission.pp.toFixed(2)} and an efficiency gap of at most ${pctText(REDRAW_RULES.commission.eg)} in your favour.`
+       compactness of at least ${c.redraw.pp.toFixed(2)} (${pctText(REDRAW_RULES.commission.ppShare)} of a neutral map's) and an efficiency gap of at most ${pctText(REDRAW_RULES.commission.eg)} in your favour.`
     : 'Redraw the map so every district is legal at the new population numbers.';
   openDialog(`
     <h2>The ${year} census</h2>
